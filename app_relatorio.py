@@ -1,6 +1,6 @@
 """
 GIRCP — Gerador Inteligente de Relatórios e Controle Fotográfico
-Engemon OpServices | v3.0
+v3.0
 """
 
 import streamlit as st
@@ -12,7 +12,7 @@ import re
 from datetime import datetime
 
 # ══════════════════════════════════════════════════════════════════════════
-# CONSTANTES DE DESIGN — ENGEMON
+# CONSTANTES DE DESIGN
 # ══════════════════════════════════════════════════════════════════════════
 COR_AZUL        = "#002060"
 COR_AZUL_MED    = "#003087"
@@ -92,12 +92,7 @@ def _css_pdf() -> str:
         line-height: 1.5;
         background: #fff;
     }}
-    .watermark {{
-        position: fixed; top: 38%; left: 50%;
-        transform: translate(-50%, -50%);
-        z-index: -999; width: 65%; opacity: 0.06;
-    }}
-    .watermark img {{ width: 100%; }}
+
     .page-header {{
         display: flex; justify-content: space-between; align-items: flex-end;
         border-bottom: 3px solid {COR_AZUL};
@@ -222,11 +217,10 @@ def _css_pdf() -> str:
 def gerar_pdf(dados: dict, fotos: list, extras: list = None) -> str:
     extras = extras or []
 
-    b64_wm  = _carregar_b64("WhatsApp Image 2026-06-25 at 05.46.59.jpeg") or _carregar_b64("logo_engemon.png")
     b64_sig = _carregar_b64("assinatura_claudevani.png")
-    b64_logo = _carregar_b64("logo_engemon.png")
+    b64_logo = _carregar_b64("logo.png")
 
-    wm_html = f'<div class="watermark"><img src="data:image/jpeg;base64,{b64_wm}"/></div>' if b64_wm else ""
+    wm_html = ""
     sig_img = f'<img class="assinatura-img" src="data:image/png;base64,{b64_sig}"/>' if b64_sig else '<div style="height:40px;"></div>'
     logo_img = f'<img class="logo-img" src="data:image/png;base64,{b64_logo}"/>' if b64_logo else ""
 
@@ -327,7 +321,7 @@ def gerar_pdf(dados: dict, fotos: list, extras: list = None) -> str:
   {sig_img}
   <div class="assinatura-linha"></div>
   <div class="assinatura-nome">{sanitizar(dados.get('contato','Responsável Técnico'))}</div>
-  <div class="assinatura-cargo">Responsável técnico | Engemon OpServices</div>
+  <div class="assinatura-cargo">Responsável Técnico</div>
   <div class="logo-wrapper">{logo_img}</div>
 </div>
 
@@ -421,7 +415,7 @@ def banner(subtitulo: str = ""):
         <div class="eng-banner-sub">GERADOR INTELIGENTE DE RELATÓRIOS E CONTROLE FOTOGRÁFICO
         {'— ' + subtitulo if subtitulo else ''}</div>
       </div>
-      <div class="eng-banner-badge">ENGEMON OPSERVICES</div>
+      <div class="eng-banner-badge">GIRCP v3.0</div>
     </div>""", unsafe_allow_html=True)
 
 
@@ -553,10 +547,10 @@ def tela_novo():
         titulo  = st.text_input("TÍTULO DO RELATÓRIO", value="Relatório Técnico de Vistoria", key="novo_titulo")
         contato = st.text_input("CONTATO / TÉCNICO RESPONSÁVEL", value=st.session_state.get("_tecnico_global", ""), key="novo_contato")
     with c2:
-        empresa  = st.text_input("EMPRESA", value="Engemon", key="novo_empresa")
+        empresa  = st.text_input("EMPRESA", value="", key="novo_empresa")
         telefone = st.text_input("TELEFONE", value="(11) 94741-4606", key="novo_telefone")
     with c3:
-        email   = st.text_input("E-MAIL", value="tecnico@engemon.com.br", key="novo_email")
+        email   = st.text_input("E-MAIL", value="", key="novo_email")
         site_id = st.text_input("IDENTIFICAÇÃO DO SITE", placeholder="Ex: SMSMT15", key="novo_site")
         col_d, col_h = st.columns(2)
         with col_d:
@@ -891,7 +885,7 @@ def tela_dashboard():
 
 
 st.set_page_config(
-    page_title="GIRCP | Engemon OpServices",
+    page_title="GIRCP",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -905,7 +899,7 @@ with st.sidebar:
       <div style="font-size:28px;">⚡</div>
       <div style="font-size:18px;font-weight:900;letter-spacing:1.5px;color:#fff;">GIRCP</div>
       <div style="font-size:10px;opacity:0.65;color:#fff;margin-top:2px;">
-        ENGEMON OPSERVICES
+        v3.0
       </div>
     </div>""", unsafe_allow_html=True)
     st.markdown("---")
