@@ -6,18 +6,16 @@ Engemon OpServices | v3.0
 import streamlit as st
 import sqlite3
 import base64
-import hashlib
-import html
 import json
 import os
-import tempfile
+import re
 import pandas as pd
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from weasyprint import HTML
 
 # ══════════════════════════════════════════════════════════════════════════
-# CONSTANTES DE DESIGN — ENGEMON E CONTROLES DE SISTEMA
+# CONSTANTES DE DESIGN — ENGEMON
 # ══════════════════════════════════════════════════════════════════════════
 COR_AZUL        = "#002060"
 COR_AZUL_MED    = "#003087"
@@ -27,105 +25,47 @@ COR_CINZA       = "#64748B"
 COR_CINZA_LIGHT = "#F1F5F9"
 COR_BORDA       = "#CBD5E1"
 COR_TEXTO       = "#1E293B"
+COR_VERDE       = "#16A34A"
+COR_AMARELO     = "#D97706"
 
 DB_NAME = "laudos_corp_v3.db"
 LBL_TITULO = "TÍTULO"
 LBL_DESCRICAO = "DESCRIÇÃO"
 OPT_DIGITAR_MANUAL = "-- Digitar Manualmente --"
-PASTA_FOTOS  = "gircp_fotos"
-MAX_IMG_MB   = 8
-MAX_IMG_BYTES = MAX_IMG_MB * 1024 * 1024
-MIME_IMAGE_JPEG = "image/jpeg"
-TIPOS_MIME_VALIDOS = {MIME_IMAGE_JPEG, "image/png", "image/webp"}
-
-LBL_RELATORIOS = "RELATÓRIOS"
-LBL_EVIDENCIAS = "EVIDÊNCIAS"
-
-os.makedirs(PASTA_FOTOS, exist_ok=True)
-
-
-def _validar_imagem(raw: bytes, nome: str, tipo_mime: str) -> tuple:
-    if len(raw) > MAX_IMG_BYTES:
-        return False, f"'{nome}' excede {MAX_IMG_MB} MB."
-    if tipo_mime not in TIPOS_MIME_VALIDOS:
-        return False, f"'{nome}' não é imagem válida (detectado: {tipo_mime})."
-    return True, ""
-
-
-def _foto_para_b64_uri(foto: dict) -> str:
-    if foto.get("base64"):
-        mime = foto.get("type", MIME_IMAGE_JPEG)
-        return f"data:{mime};base64,{foto['base64']}"
-    if foto.get("caminho"):
-        caminho = os.path.join(PASTA_FOTOS, foto["caminho"])
-        if os.path.exists(caminho):
-            with open(caminho, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode("utf-8")
-            ext  = os.path.splitext(caminho)[1].lower()
-            mime = {".jpg":".jpeg",".jpeg":MIME_IMAGE_JPEG,".png":"image/png",".webp":"image/webp"}.get(ext,MIME_IMAGE_JPEG)
-            return f"data:{mime};base64,{b64}"
-    return ""
 
 def init_db():
-    with sqlite3.connect(DB_NAME) as conn:
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS relatorios (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                titulo      TEXT,
-                contato     TEXT,
-                empresa     TEXT,
-                telefone    TEXT,
-                email       TEXT,
-                site_id     TEXT NOT NULL,
-                endereco    TEXT,
-                data_hora   TEXT,
-                fotos_json  TEXT DEFAULT '[]',
-                extras_json TEXT DEFAULT '[]',
-                criado_em   TEXT DEFAULT (datetime('now','localtime'))
-            )
-        ''')
-        for col in ("criado_em", "endereco"):
-            try:
-                conn.execute(f"ALTER TABLE relatorios ADD COLUMN {col} TEXT")
-            except sqlite3.OperationalError:
-                pass
-        conn.commit()
-
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("PRAGMA journal_mode=WAL")
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS relatorios (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            titulo      TEXT,
+            contato     TEXT,
+            empresa     TEXT,
+            telefone    TEXT,
+            email       TEXT,
+            site_id     TEXT NOT NULL,
+            endereco    TEXT,
+            data_hora   TEXT,
+            fotos_json  TEXT DEFAULT '[]',
+            extras_json TEXT DEFAULT '[]',
+            criado_em   TEXT DEFAULT (datetime('now','localtime'))
+        )
+    ''')
+    try:
+        c.execute("ALTER TABLE relatorios ADD COLUMN criado_em TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        c.execute("ALTER TABLE relatorios ADD COLUMN endereco TEXT")
+    except sqlite3.OperationalError:
+        pass
+    conn.commit()
+    conn.close()
 
 def sanitizar(texto: str) -> str:
-    return html.escape(str(texto or "").strip())
-
-
-def _checar_autenticacao():
-    try:
-        usuarios = st.secrets.get("usuarios", {})
-    except Exception:
-        usuarios = {}
-    if not usuarios or st.session_state.get("_auth_ok"):
-        return
-    st.markdown(f"""
-    <div style="max-width:400px;margin:80px auto;text-align:center;">
-      <div style="font-size:36px;">⚡</div>
-      <div style="font-size:22px;font-weight:900;color:{COR_AZUL};
-                  text-transform:uppercase;letter-spacing:1px;margin:8px 0 4px 0;">GIRCP</div>
-      <div style="color:{COR_CINZA};font-size:12px;margin-bottom:28px;">
-        ENGEMON OPSERVICES — ACESSO RESTRITO
-      </div>
-    </div>""", unsafe_allow_html=True)
-    col = st.columns([1, 2, 1])[1]
-    with col:
-        usuario = st.text_input("USUÁRIO", key="_login_user")
-        senha   = st.text_input("SENHA", type="password", key="_login_pass")
-        if st.button("ENTRAR", type="primary", use_container_width=True):
-            if usuarios.get(usuario) == senha:
-                st.session_state["_auth_ok"]        = True
-                st.session_state["_tecnico_global"] = usuario
-                st.rerun()
-            else:
-                st.error("USUÁRIO OU SENHA INCORRETOS.")
-    st.stop()
-
+    return re.sub(r'<[^>]*>', '', str(texto or '')).strip()
 
 def _carregar_b64(caminho: str) -> str:
     if os.path.exists(caminho):
@@ -159,7 +99,12 @@ def _css_pdf() -> str:
         line-height: 1.5;
         background: #fff;
     }}
-
+    .watermark {{
+        position: fixed; top: 38%; left: 50%;
+        transform: translate(-50%, -50%);
+        z-index: -999; width: 65%; opacity: 0.06;
+    }}
+    .watermark img {{ width: 100%; }}
     .page-header {{
         display: flex; justify-content: space-between; align-items: flex-end;
         border-bottom: 3px solid {COR_AZUL};
@@ -173,135 +118,76 @@ def _css_pdf() -> str:
         display: inline-block; width: 36px; height: 4px;
         background: {COR_VERMELHO}; margin-bottom: 4px;
     }}
-    .header-data {{
-        text-align: right; color: {COR_CINZA}; font-size: 9pt;
-    }}
+    .header-data {{ text-align: right; color: {COR_CINZA}; font-size: 9pt; }}
     .header-data strong {{ color: {COR_AZUL}; font-size: 11pt; }}
     .section-header {{
-        background: {COR_AZUL}; color: #fff;
-        font-weight: 700; font-size: 10pt;
-        padding: 7px 14px;
-        margin-top: 22px; margin-bottom: 14px;
+        background: {COR_AZUL}; color: #fff; font-weight: 700; font-size: 10pt;
+        padding: 7px 14px; margin-top: 22px; margin-bottom: 14px;
         text-transform: uppercase; letter-spacing: 0.5px;
-        border-left: 5px solid {COR_VERMELHO};
-        border-radius: 2px;
+        border-left: 5px solid {COR_VERMELHO}; border-radius: 2px;
     }}
     .dados-table {{
-        width: 100%; border-collapse: collapse;
-        margin-bottom: 18px;
-        border: 1px solid {COR_BORDA};
-        border-radius: 4px; overflow: hidden;
+        width: 100%; border-collapse: collapse; margin-bottom: 18px;
+        border: 1px solid {COR_BORDA}; border-radius: 4px; overflow: hidden;
     }}
-    .dados-table td {{
-        border: 1px solid {COR_BORDA}; padding: 9px 13px;
-        vertical-align: middle;
-    }}
+    .dados-table td {{ border: 1px solid {COR_BORDA}; padding: 9px 13px; vertical-align: middle; }}
     .dados-table td.label {{
-        background: {COR_AZUL_LIGHT}; font-weight: 700;
-        color: {COR_AZUL}; text-transform: uppercase;
-        font-size: 7.8pt; width: 22%; letter-spacing: 0.3px;
+        background: {COR_AZUL_LIGHT}; font-weight: 700; color: {COR_AZUL}; text-transform: uppercase;
+        font-size: 7.8pt; width: 20%; letter-spacing: 0.3px;
     }}
-    .dados-table td.value {{
-        color: {COR_TEXTO}; font-size: 9.5pt; width: 28%;
-    }}
+    .dados-table td.value {{ color: {COR_TEXTO}; font-size: 9.5pt; width: 30%; }}
     .card-evidencia {{
-        width: 100%; border-collapse: collapse;
-        margin-bottom: 14px;
-        border: 1px solid {COR_BORDA};
-        border-radius: 6px; overflow: hidden;
-        page-break-inside: avoid;
-        background: #fff;
+        width: 100%; border-collapse: collapse; margin-bottom: 14px;
+        border: 1px solid {COR_BORDA}; border-radius: 6px; overflow: hidden;
+        page-break-inside: avoid; background: #fff;
     }}
     .card-evidencia td {{ vertical-align: top; }}
     .card-num {{
-        background: {COR_AZUL}; color: #fff;
-        font-size: 11pt; font-weight: 700;
-        padding: 10px 5px; text-align: center;
-        width: 35px;
+        background: {COR_AZUL}; color: #fff; font-size: 8pt; font-weight: 700;
+        padding: 3px 8px; text-align: center; writing-mode: vertical-rl; min-width: 22px;
     }}
-    .col-foto {{
-        width: 43%; background: {COR_CINZA_LIGHT};
-        padding: 10px; text-align: center;
-        border-right: 1px solid {COR_BORDA};
-    }}
-    .col-foto img {{
-        width: 100%; max-height: 210px;
-        object-fit: contain; border-radius: 3px;
-        background: #fff;
-    }}
-    .foto-filename {{
-        font-size: 7pt; color: {COR_CINZA};
-        margin-top: 5px; font-style: italic;
-    }}
+    .col-foto {{ width: 43%; background: {COR_CINZA_LIGHT}; padding: 10px; text-align: center; border-right: 1px solid {COR_BORDA}; }}
+    .col-foto img {{ width: 100%; max-height: 210px; object-fit: contain; border-radius: 3px; background: #fff; }}
     .col-texto {{ width: 57%; padding: 14px 16px; }}
     .foto-titulo {{
-        font-weight: 800; color: {COR_AZUL};
-        font-size: 11pt; text-transform: uppercase;
-        border-bottom: 2px solid {COR_AZUL_LIGHT};
-        padding-bottom: 7px; margin-bottom: 10px;
+        font-weight: 800; color: {COR_AZUL}; font-size: 11pt; text-transform: uppercase;
+        border-bottom: 2px solid {COR_AZUL_LIGHT}; padding-bottom: 7px; margin-bottom: 10px;
     }}
-    .label-desc {{
-        font-size: 8pt; font-weight: 700;
-        color: {COR_AZUL}; margin-bottom: 4px;
-    }}
+    .label-desc {{ font-size: 8pt; font-weight: 700; color: {COR_AZUL}; margin-bottom: 4px; }}
     .foto-desc {{
-        font-size: 9pt; color: {COR_TEXTO};
-        line-height: 1.5;
-        white-space: pre-wrap;
+        font-size: 9pt; color: {COR_TEXTO}; background: {COR_CINZA_LIGHT}; padding: 9px 11px;
+        border-left: 3px solid {COR_VERMELHO}; border-radius: 0 4px 4px 0; line-height: 1.5; white-space: pre-wrap;
     }}
-    .assinatura-wrapper {{
-        margin: 44px auto 0 auto;
-        width: 300px; text-align: center;
-        page-break-inside: avoid;
-    }}
-    .assinatura-img {{
-        max-width: 180px; height: auto;
-        display: block; margin: 0 auto -10px auto;
-    }}
-    .assinatura-linha {{
-        border-top: 1.5px solid {COR_TEXTO};
-        margin: 0 0 6px 0;
-    }}
-    .assinatura-nome {{
-        font-weight: 700; color: {COR_AZUL}; font-size: 9.5pt;
-    }}
-    .assinatura-cargo {{
-        font-size: 8pt; color: {COR_CINZA};
-    }}
+    .assinatura-wrapper {{ margin: 44px auto 0 auto; width: 300px; text-align: center; page-break-inside: avoid; }}
+    .assinatura-img {{ max-width: 180px; height: auto; display: block; margin: 0 auto -10px auto; }}
+    .assinatura-linha {{ border-top: 1.5px solid {COR_TEXTO}; margin: 0 0 6px 0; }}
+    .assinatura-nome {{ font-weight: 700; color: {COR_AZUL}; font-size: 9.5pt; }}
+    .assinatura-cargo {{ font-size: 8pt; color: {COR_CINZA}; }}
     .logo-wrapper {{ margin-top: 14px; }}
-    .logo-img {{
-        max-width: 140px; height: auto;
-        display: block; margin: 0 auto;
-    }}
+    .logo-img {{ max-width: 140px; height: auto; display: block; margin: 0 auto; }}
     """
 
 def gerar_pdf(dados: dict, fotos: list, extras: list = None) -> str:
     extras = extras or []
-    
+    b64_wm  = _carregar_b64("WhatsApp Image 2026-06-25 at 05.46.59.jpeg") or _carregar_b64("logo_engemon.png")
     b64_sig = _carregar_b64("assinatura_claudevani.png")
-    b64_logo = _carregar_b64("logo.png") or _carregar_b64("logo_engemon.png")
+    b64_logo = _carregar_b64("logo_engemon.png")
 
+    wm_html = f'<div class="watermark"><img src="data:image/jpeg;base64,{b64_wm}"/></div>' if b64_wm else ""
     sig_img = f'<img class="assinatura-img" src="data:image/png;base64,{b64_sig}"/>' if b64_sig else '<div style="height:40px;"></div>'
     logo_img = f'<img class="logo-img" src="data:image/png;base64,{b64_logo}"/>' if b64_logo else ""
 
     fotos_html = ""
     for i, f in enumerate(fotos, 1):
-        mime = f.get('type', MIME_IMAGE_JPEG)
+        mime = f.get('type', 'image/jpeg')
         b64  = f.get('base64', '')
         tit  = sanitizar(f.get('titulo', f'Evidência {i}')).upper()
         desc = sanitizar(f.get('comentarios', 'N/A'))
-        fname = sanitizar(f.get('filename', ''))
-        
-        fname_html = f'<div class="foto-filename">{fname}</div>' if fname else ''
-        
         fotos_html += f"""
         <table class="card-evidencia">
           <tr>
             <td class="card-num">{i:02d}</td>
-            <td class="col-foto">
-              <img src="data:{mime};base64,{b64}"/>
-              {fname_html}
-            </td>
+            <td class="col-foto"><img src="data:{mime};base64,{b64}"/></td>
             <td class="col-texto">
               <div class="foto-titulo">{tit}</div>
               <div class="label-desc">Descrição Técnica:</div>
@@ -314,22 +200,15 @@ def gerar_pdf(dados: dict, fotos: list, extras: list = None) -> str:
     if extras:
         extras_html = '<div style="page-break-before:always;"></div><div class="section-header">3 &nbsp; ANEXOS ADICIONAIS</div>'
         for i, f in enumerate(extras, 1):
-            mime = f.get('type', MIME_IMAGE_JPEG)
+            mime = f.get('type', 'image/jpeg')
             b64  = f.get('base64', '')
             tit  = sanitizar(f.get('titulo', f'Anexo {i}')).upper()
             desc = sanitizar(f.get('comentarios', 'N/A'))
-            fname = sanitizar(f.get('filename', ''))
-            
-            fname_html = f'<div class="foto-filename">{fname}</div>' if fname else ''
-
             extras_html += f"""
             <table class="card-evidencia">
               <tr>
                 <td class="card-num">A{i:02d}</td>
-                <td class="col-foto">
-                  <img src="data:{mime};base64,{b64}"/>
-                  {fname_html}
-                </td>
+                <td class="col-foto"><img src="data:{mime};base64,{b64}"/></td>
                 <td class="col-texto">
                   <div class="foto-titulo">{tit}</div>
                   <div class="label-desc">Descrição / Contexto:</div>
@@ -342,41 +221,31 @@ def gerar_pdf(dados: dict, fotos: list, extras: list = None) -> str:
 <html lang="pt-BR">
 <head><meta charset="utf-8"><style>{_css_pdf()}</style></head>
 <body>
-
+{wm_html}
 <div class="page-header">
   <div>
     <div class="header-acento"></div>
     <div class="header-titulo">Relatório de Visita Técnica</div>
   </div>
-  <div class="header-data">
-    Data da Vistoria:<br>
-    <strong>{sanitizar(dados.get('data_hora',''))}</strong>
-  </div>
+  <div class="header-data">Data da Vistoria:<br><strong>{sanitizar(dados.get('data_hora',''))}</strong></div>
 </div>
 
 <div class="section-header">1 &nbsp; DADOS CADASTRAIS DA INFRAESTRUTURA</div>
 <table class="dados-table">
   <tr>
-    <td class="label">SITE / IDENTIFICAÇÃO</td>
-    <td class="value">{sanitizar(dados.get('site_id',''))}</td>
-    <td class="label">TÍTULO</td>
-    <td class="value">{sanitizar(dados.get('titulo',''))}</td>
+    <td class="label">SITE / IDENTIFICAÇÃO</td><td class="value">{sanitizar(dados.get('site_id',''))}</td>
+    <td class="label">TÍTULO</td><td class="value">{sanitizar(dados.get('titulo',''))}</td>
   </tr>
   <tr>
-    <td class="label">ENDEREÇO FÍSICO</td>
-    <td class="value" colspan="3">{sanitizar(dados.get('endereco',''))}</td>
+    <td class="label">ENDEREÇO FÍSICO</td><td class="value" colspan="3">{sanitizar(dados.get('endereco',''))}</td>
   </tr>
   <tr>
-    <td class="label">EMPRESA</td>
-    <td class="value">{sanitizar(dados.get('empresa',''))}</td>
-    <td class="label">CONTATO TÉCNICO</td>
-    <td class="value">{sanitizar(dados.get('contato',''))}</td>
+    <td class="label">EMPRESA</td><td class="value">{sanitizar(dados.get('empresa',''))}</td>
+    <td class="label">CONTATO TÉCNICO</td><td class="value">{sanitizar(dados.get('contato',''))}</td>
   </tr>
   <tr>
-    <td class="label">TELEFONE</td>
-    <td class="value">{sanitizar(dados.get('telefone',''))}</td>
-    <td class="label">E-MAIL</td>
-    <td class="value">{sanitizar(dados.get('email',''))}</td>
+    <td class="label">TELEFONE</td><td class="value">{sanitizar(dados.get('telefone',''))}</td>
+    <td class="label">E-MAIL</td><td class="value">{sanitizar(dados.get('email',''))}</td>
   </tr>
 </table>
 
@@ -387,15 +256,15 @@ def gerar_pdf(dados: dict, fotos: list, extras: list = None) -> str:
   {sig_img}
   <div class="assinatura-linha"></div>
   <div class="assinatura-nome">{sanitizar(dados.get('contato','Responsável Técnico'))}</div>
-  <div class="assinatura-cargo">Responsável técnico | Engemon OpServices</div>
+  <div class="assinatura-cargo">Responsável técnico | Engemon Opservices</div>
   <div class="logo-wrapper">{logo_img}</div>
 </div>
 </body></html>"""
 
-    nome_base = f"GIRCP_{sanitizar(dados.get('site_id','SITE')).replace(' ','_')}_{datetime.now().strftime('%Y%m%d%H%M%S')}.pdf"
-    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False, prefix=nome_base.replace(".pdf","_"))
-    HTML(string=html).write_pdf(tmp.name)
-    return tmp.name
+    nome = f"Relatorio_{sanitizar(dados.get('site_id','SITE')).replace(' ','_')}_{datetime.now().strftime('%Y%m%d%H%M%S')}.pdf"
+    path = os.path.join(os.getcwd(), nome)
+    HTML(string=html).write_pdf(path)
+    return path
 
 def aplicar_estilo():
     st.markdown(f"""<style>
@@ -430,7 +299,7 @@ def secao(icone: str, titulo: str):
     st.markdown(f'<div class="eng-section">{icone} &nbsp; {titulo}</div>', unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════════
-# SUBFUNÇÕES PARA MANIPULAÇÃO DE KML E ARQUIVOS BASE
+# SUBFUNÇÕES PARA MANIPULAÇÃO DE KML E ARQUIVOS BASE (BAIXA COMPLEXIDADE)
 # ══════════════════════════════════════════════════════════════════════════
 def _extrair_valor_dado_kml(data_element, local_name_fn):
     n_attr = data_element.get('name')
@@ -581,40 +450,30 @@ def _obter_filtros_cascata(df_sites):
     with c2:
         escolha = _selecionar_site(df_filtrado, col_site)
         
-    _, _ = _extrair_detalhes_site(df_sites, col_site, escolha)
+    endereco_val, modelo_val = _extrair_detalhes_site(df_sites, col_site, escolha)
+    if escolha != OPT_DIGITAR_MANUAL:
+        st.session_state["novo_site"] = escolha
+        st.session_state["novo_endereco"] = endereco_val
+        st.session_state["novo_modelo"] = modelo_val
+        
     return st.session_state.get("novo_site", ""), st.session_state.get("novo_endereco", ""), st.session_state.get("novo_modelo", "")
 
 def _processar_arquivos_upload(arquivos, prefixo_titulo):
     processadas = []
     if not arquivos:
         return processadas
-    ids_vistos = set()
     for i, arquivo in enumerate(arquivos):
-        raw = arquivo.getvalue()
-        ok, msg = _validar_imagem(raw, arquivo.name, arquivo.type)
-        if not ok:
-            st.error(f"❌ {msg}")
-            continue
-        foto_id = hashlib.sha256(raw).hexdigest()[:16]
-        if foto_id in ids_vistos:
-            st.warning(f"⚠️ DUPLICATA IGNORADA: {arquivo.name}")
-            continue
-        ids_vistos.add(foto_id)
-
         c_img, c_dados = st.columns([1, 3])
-        with c_img:
+        with c_img: 
             st.image(arquivo, use_container_width=True)
-            st.caption(f"ID: {foto_id}")
         with c_dados:
             tit = st.text_input(LBL_TITULO, key=f"t_{prefixo_titulo}_{i}")
             com = st.text_area(LBL_DESCRICAO, key=f"c_{prefixo_titulo}_{i}", height=75)
             processadas.append({
-                "foto_id":     foto_id,
-                "base64":      base64.b64encode(raw).decode("utf-8"),
-                "type":        arquivo.type,
-                "titulo":      tit.strip() or f"{prefixo_titulo} {i+1}",
-                "comentarios": com.strip() or "N/A",
-                "filename":    arquivo.name
+                "base64": base64.b64encode(arquivo.getvalue()).decode("utf-8"),
+                "type": arquivo.type, 
+                "titulo": tit.strip() or f"{prefixo_titulo} {i+1}",
+                "comentarios": com.strip() or "N/A"
             })
     return processadas
 
@@ -622,16 +481,19 @@ def _salvar_novo_relatorio(dados_cad, fotos, extras):
     if not dados_cad['site_id'].strip():
         st.error("⚠️ A IDENTIFICAÇÃO DO SITE É OBRIGATÓRIA.")
         return
-    with sqlite3.connect(DB_NAME) as conn:
-        conn.execute('''INSERT INTO relatorios 
-                     (titulo, contato, empresa, telefone, email, site_id, endereco, data_hora, fotos_json, extras_json)
-                     VALUES (?,?,?,?,?,?,?,?,?,?)''',
-                  (sanitizar(dados_cad['titulo']), sanitizar(dados_cad['contato']), 
-                   sanitizar(dados_cad['empresa']), sanitizar(dados_cad['telefone']),
-                   sanitizar(dados_cad['email']), sanitizar(dados_cad['site_id']), 
-                   sanitizar(dados_cad['endereco']), dados_cad['data_hora'],
-                   json.dumps(fotos), json.dumps(extras)))
-        conn.commit()
+
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute('''INSERT INTO relatorios 
+                 (titulo, contato, empresa, telefone, email, site_id, endereco, data_hora, fotos_json, extras_json)
+                 VALUES (?,?,?,?,?,?,?,?,?,?)''',
+              (sanitizar(dados_cad['titulo']), sanitizar(dados_cad['contato']), 
+               sanitizar(dados_cad['empresa']), sanitizar(dados_cad['telefone']),
+               sanitizar(dados_cad['email']), sanitizar(dados_cad['site_id']), 
+               sanitizar(dados_cad['endereco']), dados_cad['data_hora'],
+               json.dumps(fotos), json.dumps(extras)))
+    conn.commit()
+    conn.close()
     st.success(f"✅ RELATÓRIO **{dados_cad['site_id']}** SALVO COM SUCESSO! ACESSE A ABA PARA GERAR PDF.")
     st.balloons()
 
@@ -655,9 +517,9 @@ def _render_secao_formulario_novo(modelo_autofill):
             telefone = st.text_input("TELEFONE", value="(11) 94741-4606")
         with c3:
             email   = st.text_input("E-MAIL", value="tecnico@engemon.com.br")
-            st.text_input("IDENTIFICAÇÃO DO SITE", key="novo_site", placeholder="Ex: SMSMT15")
+            st.text_input("IDENTIFICAÇÃO DO SITE", key="novo_site", value=st.session_state.get("novo_site", ""), placeholder="Ex: SMSMT15")
             
-        st.text_input("ENDEREÇO FÍSICO DO SITE", key="novo_endereco", placeholder="Rua, Número, Bairro - UF")
+        st.text_input("ENDEREÇO FÍSICO DO SITE", key="novo_endereco", value=st.session_state.get("novo_endereco", ""), placeholder="Rua, Número, Bairro - UF")
         
         col_d, col_h = st.columns(2)
         with col_d:
@@ -706,7 +568,7 @@ def tela_novo():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# COMPONENTES DE EDIÇÃO MODULAR E PESQUISA BLINDADA 
+# COMPONENTES DE EDIÇÃO MODULAR E PESQUISA
 # ══════════════════════════════════════════════════════════════════════════
 def _render_cadastrais(row, lid):
     secao("📋", "DADOS CADASTRAIS")
@@ -726,103 +588,36 @@ def _render_cadastrais(row, lid):
     return {"tit": tit, "con": con, "emp": emp, "tel": tel, "eml": eml, "sit": sit, "dat": dat, "end": end}
 
 
-def _executar_acao_inline(lid, fid, acao, prefixo, db_field):
-    """Executa a movimentação ou deleção diretamente no banco, blindado com commit."""
-    with sqlite3.connect(DB_NAME) as conn:
-        row = conn.execute(f"SELECT {db_field} FROM relatorios WHERE id=?", (lid,)).fetchone()
-        if not row or not row[0]: return
-        fotos = json.loads(row[0])
-        
-        # 1. Salvar os textos que o usuário já digitou na interface antes da ação
-        for i in range(len(fotos)):
-            cfid = fotos[i].get("foto_id", fotos[i].get("base64", "")[:16])
-            t_val = st.session_state.get(f"{prefixo}t_{lid}_{cfid}")
-            c_val = st.session_state.get(f"{prefixo}c_{lid}_{cfid}")
-            if t_val is not None: fotos[i]["titulo"] = t_val
-            if c_val is not None: fotos[i]["comentarios"] = c_val
-            
-        # 2. Encontrar o índice real da foto afetada
-        k = next((i for i, f in enumerate(fotos) if f.get("foto_id", f.get("base64", "")[:16]) == fid), -1)
-        if k != -1:
-            # 3. Executar o comando
-            if acao == "up" and k > 0:
-                fotos[k], fotos[k-1] = fotos[k-1], fotos[k]
-            elif acao == "down" and k < len(fotos)-1:
-                fotos[k], fotos[k+1] = fotos[k+1], fotos[k]
-            elif acao == "del":
-                fotos.pop(k)
-                
-            # 4. Atualizar o banco com COMMIT EXPLICÍTO
-            conn.execute(f"UPDATE relatorios SET {db_field}=? WHERE id=?", (json.dumps(fotos), lid))
-            conn.commit()
-
-
-def _render_item_edicao(f, k, lid, prefixo, total_fotos, db_field):
-    fid = f.get("foto_id", f.get("base64", "")[:16])
-    st.markdown(
-        f'<div style="background:#fff;border:1px solid {COR_BORDA};border-left:4px solid {COR_AZUL};'
-        f'border-radius:8px;padding:12px;margin-bottom:10px;">'
-        f'<span style="background:{COR_AZUL};color:#fff;font-size:10px;font-weight:700;'
-        f'padding:2px 8px;border-radius:12px;">FOTO {k+1:02d}</span>'
-        f'&nbsp;<span style="font-size:9px;color:{COR_CINZA};font-family:monospace;">ID: {fid}</span>'
-        f'</div>',
-        unsafe_allow_html=True
-    )
-    col_i, col_d, col_ctrl = st.columns([1, 3, 0.4])
-    uri = _foto_para_b64_uri(f)
-    if uri:
-        col_i.markdown(f'<img src="{uri}" style="width:100%;border-radius:6px;"/>', unsafe_allow_html=True)
-    with col_d:
-        nt = st.text_input(LBL_TITULO, value=f.get('titulo', ''), key=f"{prefixo}t_{lid}_{fid}")
-        nc = st.text_area(LBL_DESCRICAO, value=f.get('comentarios', ''), key=f"{prefixo}c_{lid}_{fid}", height=65)
-    with col_ctrl:
-        st.markdown("<div style='margin-top:22px;'></div>", unsafe_allow_html=True)
-        if k > 0:
-            if st.form_submit_button("⬆️", key=f"{prefixo}up_{lid}_{fid}", help="Mover para cima"):
-                _executar_acao_inline(lid, fid, "up", prefixo, db_field)
-                st.rerun()
-        if k < total_fotos-1:
-            if st.form_submit_button("⬇️", key=f"{prefixo}dn_{lid}_{fid}", help="Mover para baixo"):
-                _executar_acao_inline(lid, fid, "down", prefixo, db_field)
-                st.rerun()
-            
-        if st.form_submit_button("❌", key=f"{prefixo}del_{lid}_{fid}", help="Excluir imagem"):
-            _executar_acao_inline(lid, fid, "del", prefixo, db_field)
-            st.rerun()
-
-    fc = f.copy()
-    fc['titulo'] = nt
-    fc['comentarios'] = nc
-    return fc
-
-
-def _render_edicao_lista(fotos, lid, titulo_sec, icone, prefixo):
+def _render_edicao_lista(fotos, lid, titulo_sec, icone, prefixo, ignore_keys=None):
     secao(icone, titulo_sec)
     editados = []
-    db_field = "fotos_json" if prefixo == "f" else "extras_json"
-
+    ignore_keys = ignore_keys or []
     for k, f in enumerate(fotos):
-        fc = _render_item_edicao(f, k, lid, prefixo, len(fotos), db_field)
+        if k in ignore_keys:
+            continue
+        col_i, col_d = st.columns([1, 4])
+        with col_i:
+            st.image(f"data:{f['type']};base64,{f['base64']}", width=110)
+        with col_d:
+            nt = st.text_input(LBL_TITULO, value=f.get('titulo', ''), key=f"{prefixo}t_{lid}_{k}")
+            nc = st.text_area(LBL_DESCRICAO, value=f.get('comentarios', ''), key=f"{prefixo}c_{lid}_{k}", height=65)
+        fc = f.copy()
+        fc['titulo'] = nt
+        fc['comentarios'] = nc
         editados.append(fc)
-        st.divider()
-
     return editados
 
 
 def _render_novas_fotos(lid, db_existentes):
     secao("➕", "ADICIONAR NOVAS FOTOS")
-    arq = st.file_uploader("ENVIAR NOVAS IMAGENS", type=['png', 'jpg', 'jpeg'],
-                           accept_multiple_files=True, key=f"new_{lid}")
+    arq = st.file_uploader("ENVIAR NOVAS IMAGENS", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True, key=f"new_{lid}")
     novas = []
     if arq:
+        import hashlib as _hl
         ids = {f.get("foto_id") for f in db_existentes}
         for idx_n, a in enumerate(arq):
             raw = a.getvalue()
-            ok, msg = _validar_imagem(raw, a.name, a.type)
-            if not ok:
-                st.error(f"❌ {msg}")
-                continue
-            fid = hashlib.sha256(raw).hexdigest()[:16]
+            fid = _hl.sha256(raw).hexdigest()[:16]
             col_i, col_d = st.columns([1, 4])
             with col_i:
                 st.image(a, width=90)
@@ -851,16 +646,17 @@ def _tratar_botoes_acao_pdf(lid, row, state):
         with st.spinner("GERANDO PDF..."):
             path = gerar_pdf(dados_pdf, state["fotos_db"], state["extras_db"])
         with open(path, "rb") as f_pdf:
-            st.download_button("⬇️ BAIXAR PDF", data=f_pdf,
-                               file_name=os.path.basename(path),
-                               mime="application/pdf", key=f"dl_{lid}")
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
+            st.download_button("⬇️ BAIXAR PDF", data=f_pdf, file_name=os.path.basename(path), mime="application/pdf", key=f"dl_{lid}")
 
 def _tratar_botoes_acao(lid, state):
-    col_b, col_c = st.columns(2)
+    col_a, col_b, col_c = st.columns(3)
+    with col_a:
+        if state["excluir_sel"] != "-- SELECIONE --":
+            if st.button("❌ CONFIRMAR EXCLUSÃO", key=f"xbt_{lid}"):
+                idx = int(state["excluir_sel"].split("#")[1].split(":")[0]) - 1
+                st.session_state[state["key_del"]].append(idx)
+                st.success("EVIDÊNCIA REMOVIDA. CLIQUE EM SALVAR ALTERAÇÕES.")
+                st.rerun()
     with col_b:
         if st.button("🗑️ LIMPAR TODAS AS FOTOS", key=f"lim_{lid}"):
             st.session_state[f"conf_lim_{lid}"] = True
@@ -870,12 +666,14 @@ def _tratar_botoes_acao(lid, state):
 
 def _tratar_limpeza(lid):
     if st.session_state.get(f"conf_lim_{lid}"):
-        st.warning("⚠️ TEM CERTEZA? ESTA AÇÃO APAGARÁ **TODAS** AS FOTOS E ANEXOS DESTE RELATÓRIO.")
+        st.warning("⚠️ TEM CERTEZA? ESTA AÇÃO APAGARÁ **TODAS** AS FOTOS.")
         cs, cn = st.columns(2)
         if cs.button("✅ SIM, APAGAR TUDO", key=f"sim_{lid}"):
-            with sqlite3.connect(DB_NAME) as conn:
-                conn.execute("UPDATE relatorios SET fotos_json='[]', extras_json='[]' WHERE id=?", (lid,))
-                conn.commit()
+            conn2 = sqlite3.connect(DB_NAME)
+            c2 = conn2.cursor()
+            c2.execute("UPDATE relatorios SET fotos_json='[]', extras_json='[]' WHERE id=?", (lid,))
+            conn2.commit()
+            conn2.close()
             st.session_state.pop(f"conf_lim_{lid}", None)
             st.rerun()
         if cn.button("❌ CANCELAR", key=f"nao_{lid}"):
@@ -884,19 +682,29 @@ def _tratar_limpeza(lid):
 
 
 def _salvar_edicoes(lid, state):
-    fotos_finais = state["fotos_edit"] + state["novas"]
-    extras_finais = state["extras_edit"] 
+    fotos_finais_edit = []
+    idx_edit = 0
+    kd = st.session_state[state["key_del"]]
+    for k, f in enumerate(state["fotos_db"]):
+        if k not in kd:
+            if idx_edit < len(state["fotos_edit"]):
+                fotos_finais_edit.append(state["fotos_edit"][idx_edit])
+                idx_edit += 1
+            else:
+                fotos_finais_edit.append(f)
+    fotos_finais_edit += state["novas"]
+    st.session_state[state["key_del"]] = []
 
     d = state["cad"]
-    with sqlite3.connect(DB_NAME) as conn:
-        conn.execute('''UPDATE relatorios
-                        SET titulo=?,contato=?,empresa=?,telefone=?,email=?,
-                            site_id=?,endereco=?,data_hora=?,
-                            fotos_json=?,extras_json=? WHERE id=?''',
-                     (d["tit"], d["con"], d["emp"], d["tel"], d["eml"],
-                      d["sit"], d["end"], d["dat"],
-                      json.dumps(fotos_finais), json.dumps(extras_finais), lid))
-        conn.commit()
+    conn3 = sqlite3.connect(DB_NAME)
+    c3 = conn3.cursor()
+    c3.execute('''UPDATE relatorios
+                    SET titulo=?,contato=?,empresa=?,telefone=?,email=?,site_id=?,endereco=?,data_hora=?,
+                        fotos_json=?,extras_json=? WHERE id=?''',
+                (d["tit"], d["con"], d["emp"], d["tel"], d["eml"], d["sit"], d["end"], d["dat"],
+                 json.dumps(fotos_finais_edit), json.dumps(state["extras_edit"]), lid))
+    conn3.commit()
+    conn3.close()
     st.success("✅ RELATÓRIO ATUALIZADO COM SUCESSO!")
     st.rerun()
 
@@ -910,17 +718,29 @@ def _processar_acoes_relatorio(state: dict):
 
 
 def _render_dados_cadastrais_form(row, lid, fotos_db, extras_db):
+    key_del = f"del_{lid}"
+    if key_del not in st.session_state:
+        st.session_state[key_del] = []
+
     with st.form(f"form_ed_{lid}"):
         cad = _render_cadastrais(row, lid)
-        fotos_edit = _render_edicao_lista(fotos_db, lid, "EDITAR EVIDÊNCIAS", "📸", "f")
+        fotos_edit = _render_edicao_lista(fotos_db, lid, "EDITAR EVIDÊNCIAS", "📸", "f", st.session_state[key_del])
         extras_edit = _render_edicao_lista(extras_db, lid, "EDITAR ANEXOS", "📎", "e")
         novas = _render_novas_fotos(lid, fotos_db + extras_db)
 
-        salvar = st.form_submit_button("🔄  SALVAR ALTERAÇÕES", type="primary", use_container_width=True)
+        col_s, col_del = st.columns([2, 1])
+        with col_s:
+            salvar = st.form_submit_button("🔄  SALVAR ALTERAÇÕES", type="primary", use_container_width=True)
+        with col_del:
+            excluir_sel = st.selectbox(
+                "EXCLUIR EVIDÊNCIA:",
+                ["-- SELECIONE --"] + [f"#{k+1}: {f.get('titulo','')}" for k, f in enumerate(fotos_db) if k not in st.session_state[key_del]],
+                key=f"sel_{lid}"
+            )
 
     return {
-        "lid": lid, "row": row, "salvar": salvar, 
-        "fotos_db": fotos_db, "extras_db": extras_db,
+        "lid": lid, "row": row, "salvar": salvar, "excluir_sel": excluir_sel,
+        "key_del": key_del, "fotos_db": fotos_db, "extras_db": extras_db,
         "fotos_edit": fotos_edit, "extras_edit": extras_edit, "novas": novas, "cad": cad
     }
 
@@ -929,31 +749,21 @@ def _render_relatorio_expander(row):
     fotos_db = json.loads(row['fotos_json'] or "[]")
     extras_db = json.loads(row['extras_json'] or "[]") if 'extras_json' in row.keys() else []
     
-    # O Título fixo do Expander impede que ele feche subitamente na troca/exclusão da imagem.
-    with st.expander(f"📍 **{row['site_id']}**  |  {row['data_hora']}  |  ID #{lid}"):
+    with st.expander(f"📍 **{row['site_id']}**  |  {row['data_hora']}  |  {len(fotos_db)} evidência(s)  {len(extras_db)} anexo(s)  |  ID #{lid}"):
         state = _render_dados_cadastrais_form(row, lid, fotos_db, extras_db)
         _processar_acoes_relatorio(state)
 
-def _executar_busca_relatorios(termo, limite, offset=0):
-    with sqlite3.connect(DB_NAME) as conn:
-        conn.row_factory = sqlite3.Row
-        if termo.strip():
-            rows = conn.execute(
-                "SELECT * FROM relatorios WHERE site_id LIKE ? OR titulo LIKE ? "
-                "ORDER BY id DESC LIMIT ? OFFSET ?",
-                (f'%{termo}%', f'%{termo}%', limite, offset)
-            ).fetchall()
-            total = conn.execute(
-                "SELECT COUNT(*) FROM relatorios WHERE site_id LIKE ? OR titulo LIKE ?",
-                (f'%{termo}%', f'%{termo}%')
-            ).fetchone()[0]
-        else:
-            rows = conn.execute(
-                "SELECT * FROM relatorios ORDER BY id DESC LIMIT ? OFFSET ?",
-                (limite, offset)
-            ).fetchall()
-            total = conn.execute("SELECT COUNT(*) FROM relatorios").fetchone()[0]
-    return rows, total
+def _executar_busca_relatorios(termo, limite):
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    if termo.strip():
+        c.execute("SELECT * FROM relatorios WHERE site_id LIKE ? OR titulo LIKE ? ORDER BY id DESC LIMIT ?", (f'%{termo}%', f'%{termo}%', limite))
+    else:
+        c.execute("SELECT * FROM relatorios ORDER BY id DESC LIMIT ?", (limite,))
+    rows = c.fetchall()
+    conn.close()
+    return rows
 
 def _render_metricas_pesquisa(rows):
     st.markdown("<br>", unsafe_allow_html=True)
@@ -962,7 +772,7 @@ def _render_metricas_pesquisa(rows):
         st.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{len(rows)}</div><div class="eng-metric-label">RESULTADOS</div></div>', unsafe_allow_html=True)
     with tb:
         total_ev = sum(len(json.loads(r['fotos_json'] or "[]")) for r in rows)
-        st.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{total_ev}</div><div class="eng-metric-label">{LBL_EVIDENCIAS}</div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{total_ev}</div><div class="eng-metric-label">EVIDÊNCIAS</div></div>', unsafe_allow_html=True)
     with tc:
         total_ex = sum(len(json.loads(r['extras_json'] or "[]")) if 'extras_json' in r.keys() else 0 for r in rows)
         st.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{total_ex}</div><div class="eng-metric-label">ANEXOS</div></div>', unsafe_allow_html=True)
@@ -972,96 +782,33 @@ def _render_metricas_pesquisa(rows):
 def tela_pesquisa():
     banner("PESQUISAR, EDITAR E EXPORTAR")
     secao("🔍", "BUSCAR RELATÓRIOS")
-
+    
     col_busca, col_lim = st.columns([3, 1])
     with col_busca:
         termo = st.text_input("NOME DO SITE OU PARTE DO TÍTULO:", placeholder="Ex: SMSMT15")
     with col_lim:
-        limite = st.selectbox("POR PÁGINA", [10, 25, 50], index=0)
+        limite = st.selectbox("EXIBIR", [10, 25, 50, 100], index=0)
 
-    pag_key = "pesq_pag"
-    if pag_key not in st.session_state:
-        st.session_state[pag_key] = 1
-    pag_atual = st.session_state[pag_key]
-    offset = (pag_atual - 1) * limite
+    rows = _executar_busca_relatorios(termo, limite)
 
-    rows, total = _executar_busca_relatorios(termo, limite, offset)
-    total_pags  = max(1, (total + limite - 1) // limite)
-
-    if not rows and pag_atual == 1:
+    if not rows:
         st.info("NENHUM RELATÓRIO ENCONTRADO. CRIE UM NA ABA 'NOVO RELATÓRIO'.")
         return
 
     _render_metricas_pesquisa(rows)
 
-    cp1, cp2, cp3 = st.columns([1, 3, 1])
-    if cp1.button("◀ ANTERIOR", disabled=pag_atual <= 1):
-        st.session_state[pag_key] -= 1
-        st.rerun()
-    cp2.markdown(
-        f"<div style='text-align:center;padding:8px;color:{COR_CINZA};font-size:13px;'>"
-        f"PÁGINA {pag_atual} DE {total_pags} &nbsp;|&nbsp; {total} RESULTADO(S)</div>",
-        unsafe_allow_html=True
-    )
-    if cp3.button("PRÓXIMA ▶", disabled=pag_atual >= total_pags):
-        st.session_state[pag_key] += 1
-        st.rerun()
-
     for row in rows:
         _render_relatorio_expander(row)
 
 
-def _render_dashboard_graficos(rows):
-    df_trend = pd.DataFrame([{
-        "MÊS": (r["criado_em"] or r["data_hora"] or "")[:7],
-        LBL_RELATORIOS: 1,
-        LBL_EVIDENCIAS: len(json.loads(r["fotos_json"] or "[]"))
-    } for r in rows if (r["criado_em"] or r["data_hora"] or "")[:7]])
-
-    if not df_trend.empty:
-        df_grp = df_trend.groupby("MÊS").sum().reset_index().sort_values("MÊS")
-        import plotly.express as px
-        fig = px.bar(df_grp, x="MÊS", y=LBL_RELATORIOS,
-                     color_discrete_sequence=[COR_AZUL],
-                     title=f"{LBL_RELATORIOS} POR MÊS")
-        fig.add_scatter(x=df_grp["MÊS"], y=df_grp[LBL_EVIDENCIAS],
-                        mode="lines+markers", name=LBL_EVIDENCIAS,
-                        line={"color": COR_VERMELHO, "width": 2})
-        fig.update_layout(
-            plot_bgcolor="#fff", paper_bgcolor="#fff",
-            font={"color": COR_TEXTO}, title_font={"color": COR_AZUL, "size": 13},
-            legend={"orientation": "h", "y": -0.2}, margin={"t": 50, "b": 40}
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-def _render_dashboard_top10(rows):
-    df_chart = pd.DataFrame([{
-        "SITE": r['site_id'],
-        "TOTAL FOTOS": len(json.loads(r['fotos_json'] or "[]")) +
-                       (len(json.loads(r['extras_json'] or "[]")) if 'extras_json' in r.keys() else 0)
-    } for r in rows])
-    if not df_chart.empty:
-        df_agrupado = df_chart.groupby("SITE").sum().reset_index().sort_values("TOTAL FOTOS", ascending=False).head(10)
-        st.bar_chart(data=df_agrupado.set_index("SITE"), color=COR_VERMELHO, height=300)
-
-def _render_dashboard_tabela(rows):
-    df = pd.DataFrame([{
-        "ID": r['id'],
-        "SITE": r['site_id'],
-        "ENDEREÇO": r['endereco'] if 'endereco' in r.keys() else "",
-        "DATA/HORA": r['data_hora'],
-        LBL_EVIDENCIAS: len(json.loads(r['fotos_json'] or "[]")),
-        "ANEXOS": len(json.loads(r['extras_json'] or "[]")) if 'extras_json' in r.keys() else 0,
-        "CRIADO EM": (r['criado_em'] or "")[:16],
-    } for r in rows[:10]])
-    st.dataframe(df, use_container_width=True, hide_index=True)
-
-
 def tela_dashboard():
     banner("DASHBOARD")
-    with sqlite3.connect(DB_NAME) as conn:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute("SELECT * FROM relatorios ORDER BY id DESC").fetchall()
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("SELECT * FROM relatorios ORDER BY id DESC")
+    rows = c.fetchall()
+    conn.close()
 
     if not rows:
         st.info("NENHUM RELATÓRIO CADASTRADO AINDA.")
@@ -1075,28 +822,35 @@ def tela_dashboard():
     secao("📊", "RESUMO GERAL")
     m1, m2, m3, m4 = st.columns(4)
     for col, val, lbl in [
-        (m1, total_rel,  LBL_RELATORIOS),
+        (m1, total_rel,  "RELATÓRIOS"),
         (m2, sites_uniq, "SITES ÚNICOS"),
-        (m3, total_ev,   LBL_EVIDENCIAS),
+        (m3, total_ev,   "EVIDÊNCIAS"),
         (m4, total_ex,   "ANEXOS"),
     ]:
-        col.markdown(
-            f'<div class="eng-metric"><div class="eng-metric-val">{val}</div>'
-            f'<div class="eng-metric-label">{lbl}</div></div>',
-            unsafe_allow_html=True
-        )
+        col.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{val}</div><div class="eng-metric-label">{lbl}</div></div>', unsafe_allow_html=True)
 
     st.markdown("---")
-    secao("📈", f"EVOLUÇÃO MENSAL DE {LBL_RELATORIOS} E {LBL_EVIDENCIAS}")
-    _render_dashboard_graficos(rows)
-
-    st.markdown("---")
-    secao("📈", "TOP 10 SITES COM MAIS FOTOS")
-    _render_dashboard_top10(rows)
+    secao("📈", "ANÁLISE DE PRODUTIVIDADE (TOP 10 SITES COM MAIS FOTOS)")
+    df_chart = pd.DataFrame([{
+        "SITE": r['site_id'],
+        "TOTAL FOTOS": len(json.loads(r['fotos_json'] or "[]")) + (len(json.loads(r['extras_json'] or "[]")) if 'extras_json' in r.keys() else 0)
+    } for r in rows])
+    
+    if not df_chart.empty:
+        df_agrupado = df_chart.groupby("SITE").sum().reset_index().sort_values("TOTAL FOTOS", ascending=False).head(10)
+        st.bar_chart(data=df_agrupado.set_index("SITE"), color="#DA291C", height=350)
 
     st.markdown("---")
     secao("📋", "ÚLTIMOS 10 RELATÓRIOS")
-    _render_dashboard_tabela(rows)
+    df = pd.DataFrame([{
+        "ID": r['id'],
+        "SITE": r['site_id'],
+        "ENDEREÇO": r['endereco'] if 'endereco' in r.keys() else "",
+        "DATA/HORA": r['data_hora'],
+        "EVIDÊNCIAS": len(json.loads(r['fotos_json'] or "[]")),
+        "ANEXOS": len(json.loads(r['extras_json'] or "[]")) if 'extras_json' in r.keys() else 0,
+    } for r in rows[:10]])
+    st.dataframe(df, use_container_width=True, hide_index=True)
 
 
 st.set_page_config(
@@ -1106,7 +860,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 init_db()
-_checar_autenticacao()
 aplicar_estilo()
 
 with st.sidebar:
@@ -1132,7 +885,7 @@ with st.sidebar:
     )
     st.markdown("---")
     st.markdown(f"""<div style="font-size:10px;opacity:0.55;color:#fff;text-align:center;">
-    v3.1 · {datetime.now().strftime('%d/%m/%Y')}<br>
+    v3.0 · {datetime.now().strftime('%d/%m/%Y')}<br>
     Dados protegidos pela LGPD</div>""", unsafe_allow_html=True)
 
 rule_map = {
