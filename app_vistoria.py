@@ -1,6 +1,7 @@
 import streamlit as st
 import sqlite3
 import os
+import uuid
 from datetime import datetime
 from fpdf import FPDF
 from PIL import Image
@@ -54,10 +55,11 @@ def gerar_pdf(dados, fotos):
             
         y_before = pdf.get_y()
         
-        # Salva imagem temporária para o FPDF ler
+        # Salva imagem temporária para o FPDF ler com hash único para evitar concorrência
         img = Image.open(foto_data['file'])
         img = img.convert('RGB')
-        temp_img_path = f"temp_img_{i}.jpg"
+        hash_img = uuid.uuid4().hex[:8]
+        temp_img_path = f"temp_img_{hash_img}_{i}.jpg"
         img.save(temp_img_path, format="JPEG", quality=70)
         
         # Desenha a imagem e o texto
@@ -70,7 +72,9 @@ def gerar_pdf(dados, fotos):
         pdf.multi_cell(90, 5, foto_data['comentario'])
         
         pdf.set_y(y_before + 75) # Espaçamento para a próxima foto
-        os.remove(temp_img_path)
+        
+        if os.path.exists(temp_img_path):
+            os.remove(temp_img_path)
 
     nome_arquivo = f"Relatorio_{dados['localizacao'].replace(' ', '_')}_{datetime.now().strftime('%Y%m%d%H%M')}.pdf"
     pdf.output(nome_arquivo)
@@ -104,8 +108,10 @@ with st.form("form_relatorio"):
             with col_img:
                 st.image(arquivo, width=200)
             with col_txt:
-                tit = st.text_input(f"Título da foto {i+1}", key=f"t_{i}")
-                com = st.text_area(f"Comentários da foto {i+1}", key=f"c_{i}")
+                # Blindando as chaves dinâmicas para evitar perda de dados caso a imagem mude de posição
+                safe_key = arquivo.name.replace(".", "_").replace(" ", "_")
+                tit = st.text_input(f"Título da foto {i+1}", key=f"t_{safe_key}_{i}")
+                com = st.text_area(f"Comentários da foto {i+1}", key=f"c_{safe_key}_{i}")
                 fotos_processadas.append({"file": arquivo, "titulo": tit, "comentario": com})
 
     submit = st.form_submit_button("💾 Salvar e Gerar PDF")

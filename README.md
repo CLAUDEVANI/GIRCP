@@ -30,8 +30,8 @@ pip install streamlit weasyprint
 **3. Configure os ativos visuais**
 Para que o PDF corporativo seja gerado perfeitamente, certifique-se de que os seguintes arquivos de imagem estejam salvos no mesmo diretório do script principal:
 * `assinatura_claudevani.png` (Arquivo de assinatura)
-* `logo_engemon.png` (Logotipo da empresa)
-* `WhatsApp Image 2026-06-25 at 05.46.59.jpeg` (Marca d'água de fundo)
+* `logo_empresa.png` (Logotipo da empresa)
+* `marca_d'agua.jpeg` (Marca d'água de fundo)
 
 **4. Execute a aplicação**
 ```bash
