@@ -1,6 +1,6 @@
 """
 GIRCP — Gerador Inteligente de Relatórios e Controle Fotográfico
-| v3.3 (Cartografia de Alta Precisão e Tipografia Escalada)
+| v3.4.1 (Módulo de Roteirização ORS com Numeração Sequencial)
 """
 
 import streamlit as st
@@ -10,9 +10,12 @@ import json
 import os
 import io
 import hashlib
+import math
+import requests
 import html as html_mod
 import pandas as pd
 import plotly.express as px
+import pydeck as pdk
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from PIL import Image
@@ -93,7 +96,6 @@ def init_db():
         conn.commit()
 
 def sanitizar(texto: str) -> str:
-    """Escapa entidades HTML e previne injeção de script (XSS)."""
     return html_mod.escape(str(texto or '').strip())
 
 def comprimir_para_pdf(raw: bytes, max_px: int = 1200, qualidade: int = 78) -> bytes:
@@ -201,7 +203,7 @@ def gerar_pdf(dados: dict, fotos: list, extras: list = None) -> tuple[bytes, str
         extras_html = '<div style="page-break-before:always;"></div><div class="section-header">3 &nbsp; ANEXOS ADICIONAIS</div>'
         for i, f in enumerate(extras, 1):
             b64  = _obter_b64_de_foto(f)
-            mime = f.get('type', 'image/jpeg')
+            mime = sanitizar(f.get('type', 'image/jpeg'))
             tit  = sanitizar(f.get('titulo', f'Anexo {i}')).upper()
             desc = sanitizar(f.get('comentarios', 'N/A'))
             extras_html += f"""
@@ -271,6 +273,9 @@ def secao(icone: str, titulo: str):
     st.markdown(f'<div class="eng-section">{sanitizar(icone)} &nbsp; {sanitizar(titulo)}</div>', unsafe_allow_html=True)
 
 def _parse_kml_to_dataframe(arquivo_kml):
+    if hasattr(arquivo_kml, 'seek'):
+        arquivo_kml.seek(0)
+        
     tree = ET.parse(arquivo_kml)
     root = tree.getroot()
     
@@ -296,14 +301,13 @@ def _parse_kml_to_dataframe(arquivo_kml):
                 except (ValueError, IndexError):
                     pass
 
-        # 2. Extração Avançada KML Claro/Telecom (ExtendedData / SimpleData)
+        # 2. Extração Avançada KML Claro/Telecom
         ext_data = placemark.find('.//ExtendedData')
         endereco, grupo = "", ""
         if ext_data is not None:
-            # Varredura do formato padrão Google Earth
             for data in ext_data.findall('.//Data'):
                 n_attr = str(data.get('name', '')).upper()
-                v_node = data.find('.//value')
+                v_node = data.find('value')
                 val = v_node.text.strip() if v_node is not None and v_node.text else ""
                 
                 if 'ENDERE' in n_attr or 'RUA' in n_attr: endereco = val
@@ -314,21 +318,7 @@ def _parse_kml_to_dataframe(arquivo_kml):
                 elif 'LONGITUDE' in n_attr or 'LON' == n_attr:
                     try: lon = float(val.replace(',', '.'))
                     except ValueError: pass
-            
-            # Varredura do formato Claro/Ericsson
-            for sdata in ext_data.findall('.//SimpleData'):
-                n_attr = str(sdata.get('name', '')).upper()
-                val = sdata.text.strip() if sdata.text else ""
-                
-                if 'ENDERE' in n_attr or 'RUA' in n_attr: endereco = val
-                elif n_attr in ['GRUPO', 'ÁREA', 'AREA']: grupo = val
-                elif 'LATITUDE' in n_attr or 'LAT' == n_attr:
-                    try: lat = float(val.replace(',', '.'))
-                    except ValueError: pass
-                elif 'LONGITUDE' in n_attr or 'LON' == n_attr:
-                    try: lon = float(val.replace(',', '.'))
-                    except ValueError: pass
-                
+                    
         dados.append({'SITE': site_id, 'ENDEREÇO': endereco, 'GRUPO': grupo, 'LATITUDE': lat, 'LONGITUDE': lon})
     return pd.DataFrame(dados)
 
@@ -400,6 +390,14 @@ def tela_novo():
     df_sites = _carregar_base_dados(arquivo_base)
     site_selecionado, endereco_autofill, lat_autofill, lon_autofill = _obter_filtros_cascata(df_sites)
 
+    if "site_anterior" not in st.session_state:
+        st.session_state["site_anterior"] = None
+
+    if st.session_state["site_anterior"] != site_selecionado:
+        st.session_state["novo_lat"] = float(lat_autofill)
+        st.session_state["novo_lon"] = float(lon_autofill)
+        st.session_state["site_anterior"] = site_selecionado
+
     secao("📸", "2. EVIDÊNCIAS FOTOGRÁFICAS PRINCIPAIS")
     arq_fotos = st.file_uploader("FOTOS QUE DOCUMENTAM INTERVENÇÕES", type=["jpg", "jpeg", "png"], accept_multiple_files=True, key="up_evidencias_principal")
     
@@ -441,6 +439,12 @@ def tela_novo():
         tecnico  = st.text_input("TÉCNICO EM CAMPO", value=st.session_state.get("_tecnico_global", ""), key="novo_tecnico")
         endereco = st.text_input("ENDEREÇO FÍSICO", value=endereco_autofill)
 
+        c_lat_novo, c_lon_novo = st.columns(2)
+        with c_lat_novo:
+            latitude_manual = st.number_input("LATITUDE", format="%.6f", step=0.000001, key="novo_lat")
+        with c_lon_novo:
+            longitude_manual = st.number_input("LONGITUDE", format="%.6f", step=0.000001, key="novo_lon")
+
         col_d, col_h = st.columns(2)
         with col_d: data_vis = st.date_input("DATA DA VISITA", value=datetime.today(), key="novo_data")
         with col_h: hora_vis = st.time_input("HORA", value=datetime.now().time(), key="novo_hora")
@@ -449,7 +453,7 @@ def tela_novo():
         dados_cad = {
             "titulo": titulo, "contato": contato, "empresa": empresa, "telefone": telefone,
             "email": email, "site_id": site_id, "endereco": endereco, "data_hora": data_hora,
-            "tecnico": tecnico or contato, "latitude": lat_autofill, "longitude": lon_autofill
+            "tecnico": tecnico or contato, "latitude": latitude_manual, "longitude": longitude_manual
         }
 
         st.divider()
@@ -526,8 +530,18 @@ def _render_cadastrais(row, lid):
         eml = st.text_input("E-MAIL", value=row['email'], key=f"eml_{lid}")
         sit = st.text_input("SITE", value=row['site_id'], key=f"sit_{lid}")
         dat = st.text_input("DATA E HORA", value=row['data_hora'], key=f"dat_{lid}")
+    
     end = st.text_input("ENDEREÇO", value=row['endereco'] if 'endereco' in row.keys() else "", key=f"end_{lid}")
-    return {"tit": tit, "con": con, "emp": emp, "tel": tel, "eml": eml, "sit": sit, "dat": dat, "end": end}
+    
+    c_lat, c_lon = st.columns(2)
+    with c_lat:
+        lat_val = float(row['latitude']) if 'latitude' in row.keys() and row['latitude'] is not None else 0.0
+        lat = st.number_input("LATITUDE", value=lat_val, format="%.6f", step=0.000001, key=f"lat_{lid}")
+    with c_lon:
+        lon_val = float(row['longitude']) if 'longitude' in row.keys() and row['longitude'] is not None else 0.0
+        lon = st.number_input("LONGITUDE", value=lon_val, format="%.6f", step=0.000001, key=f"lon_{lid}")
+
+    return {"tit": tit, "con": con, "emp": emp, "tel": tel, "eml": eml, "sit": sit, "dat": dat, "end": end, "lat": lat, "lon": lon}
 
 def _executar_acao_inline(lid, fid, acao, prefixo, db_field):
     if db_field not in ("fotos_json", "extras_json"):
@@ -568,7 +582,7 @@ def _render_item_edicao(f, k, lid, prefixo, total_fotos, db_field):
     )
     col_i, col_d, col_ctrl = st.columns([1, 3, 0.4])
     b64_data = _obter_b64_de_foto(f)
-    uri = f"data:{f.get('type', 'image/jpeg')};base64,{b64_data}"
+    uri = f"data:{sanitizar(f.get('type', 'image/jpeg'))};base64,{b64_data}"
     
     if b64_data: col_i.markdown(f'<img src="{uri}" style="width:100%;border-radius:6px;"/>', unsafe_allow_html=True)
     with col_d:
@@ -643,7 +657,7 @@ def _tratar_botoes_acao(lid, state):
     col_b, col_c = st.columns(2)
     with col_b:
         if st.button("🗑️ LIMPAR TODAS AS FOTOS", key=f"lim_{lid}"): st.session_state[f"conf_lim_{lid}"] = True
-    with col_c: _tratar_botoes_acao_pdf(lid, state["row"], state)
+    with col_c: _tratar_botoes_acao_pdf(lid, row=state["row"], state=state)
 
 def _tratar_limpeza(lid):
     if st.session_state.get(f"conf_lim_{lid}"):
@@ -665,10 +679,10 @@ def _salvar_edicoes(lid, state):
         conn.execute('''UPDATE relatorios
                         SET titulo=?,contato=?,empresa=?,telefone=?,email=?,
                             site_id=?,endereco=?,data_hora=?,
-                            fotos_json=?,extras_json=? WHERE id=?''',
+                            fotos_json=?,extras_json=?, latitude=?, longitude=? WHERE id=?''',
                      (d["tit"], d["con"], d["emp"], d["tel"], d["eml"],
                       d["sit"], d["end"], d["dat"],
-                      json.dumps(fotos_finais), json.dumps(extras_finais), lid))
+                      json.dumps(fotos_finais), json.dumps(extras_finais), d["lat"], d["lon"], lid))
         conn.commit()
     st.success("✅ RELATÓRIO ATUALIZADO COM SUCESSO!"); st.rerun()
 
@@ -781,18 +795,11 @@ def tela_dashboard():
         secao("🚨", "DISTRIBUIÇÃO DE SEVERIDADE")
         severidades = {"Critico": 0, "Observacao": 0, "Normal": 0}
         
-        cores_mapa = []
         for _, r in df_filtrado.iterrows():
-            tem_critico = False
             for foto in json.loads(r['fotos_json'] or "[]"):
                 sev = foto.get('severidade', 'Normal')
                 sev_norm = {'Crítico': 'Critico', 'Observação': 'Observacao'}.get(sev, sev)
                 severidades[sev_norm] = severidades.get(sev_norm, 0) + 1
-                if sev_norm == 'Critico':
-                    tem_critico = True
-            cores_mapa.append(COR_VERMELHO if tem_critico else COR_AZUL)
-            
-        df_filtrado['cor_pino'] = cores_mapa
         
         df_sev = pd.DataFrame(list(severidades.items()), columns=['Severidade', 'Quantidade'])
         if df_sev['Quantidade'].sum() > 0:
@@ -812,31 +819,54 @@ def tela_dashboard():
         df_mapa['latitude'] = pd.to_numeric(df_mapa['latitude'], errors='coerce')
         df_mapa['longitude'] = pd.to_numeric(df_mapa['longitude'], errors='coerce')
         df_mapa = df_mapa.dropna(subset=['latitude', 'longitude'])
-        df_mapa = df_mapa[(df_mapa['latitude'] != 0.0) & (df_mapa['longitude'] != 0.0)]
+        df_mapa = df_mapa[(df_mapa['latitude'] != 0.0) & (df_mapa['longitude'] != 0.0)].reset_index(drop=True)
+
+        cores_mapa_filtrado = []
+        for _, r in df_mapa.iterrows():
+            tem_critico = any(
+                {'Crítico': 'Critico', 'Observação': 'Observacao'}.get(f.get('severidade', 'Normal'), f.get('severidade', 'Normal')) == 'Critico'
+                for f in json.loads(r['fotos_json'] or '[]')
+            )
+            cores_mapa_filtrado.append([218, 41, 28, 200] if tem_critico else [0, 48, 135, 200])
+            
+        df_mapa['color_rgb'] = cores_mapa_filtrado
 
         if not df_mapa.empty:
-            if hasattr(px, "scatter_map"):
-                fig_mapa = px.scatter_map(
-                    df_mapa, lat="latitude", lon="longitude", hover_name="site_id",
-                    hover_data={"latitude": False, "longitude": False, "tecnico": True, "data_hora": True},
-                    color="cor_pino", color_discrete_map="identity", zoom=8, height=450
-                )
-                fig_mapa.update_layout(map_style="carto-positron", margin={"r":0,"t":0,"l":0,"b":0})
-            elif hasattr(px, "scatter_mapbox"):
-                fig_mapa = px.scatter_mapbox(
-                    df_mapa, lat="latitude", lon="longitude", hover_name="site_id",
-                    hover_data={"latitude": False, "longitude": False, "tecnico": True, "data_hora": True},
-                    color="cor_pino", color_discrete_map="identity", zoom=8, height=450
-                )
-                fig_mapa.update_layout(mapbox_style="carto-positron", margin={"r":0,"t":0,"l":0,"b":0})
-            else:
-                fig_mapa = px.scatter_geo(
-                    df_mapa, lat="latitude", lon="longitude", hover_name="site_id",
-                    color="cor_pino", color_discrete_map="identity"
-                )
-                fig_mapa.update_layout(margin={"r":0,"t":0,"l":0,"b":0})
+            view_state = pdk.ViewState(
+                latitude=df_mapa['latitude'].mean(),
+                longitude=df_mapa['longitude'].mean(),
+                zoom=10,
+                pitch=0
+            )
+
+            layer = pdk.Layer(
+                "ScatterplotLayer",
+                data=df_mapa,
+                get_position="[longitude, latitude]",
+                get_color="color_rgb",
+                get_radius=200,
+                radiusMinPixels=8,
+                radiusMaxPixels=16,
+                pickable=True,
+                stroked=True,
+                get_line_color=[255, 255, 255],
+                lineWidthMinPixels=2
+            )
+            
+            tooltip = {
+                "html": "<b>📍 Site: {site_id}</b><br>👷 Técnico: {tecnico}<br>📅 Data: {data_hora}<br>🏠 {endereco}",
+                "style": {"backgroundColor": "#002060", "color": "white", "borderRadius": "6px", "padding": "10px"}
+            }
+            
+            r = pdk.Deck(
+                layers=[layer],
+                initial_view_state=view_state,
+                tooltip=tooltip,
+                map_style="road"
+            )
+
+            st.pydeck_chart(r, use_container_width=True)
                 
-            st.plotly_chart(fig_mapa, use_container_width=True)
             st.markdown(f"<span style='color:{COR_AZUL};font-weight:bold;'>🔵 Operação Normal</span> &nbsp;&nbsp; | &nbsp;&nbsp; <span style='color:{COR_VERMELHO};font-weight:bold;'>🔴 Contém Anomalia Crítica</span>", unsafe_allow_html=True)
         else:
             st.info("💡 Nenhum relatório filtrado possui coordenadas de GPS salvas para plotagem no mapa.")
@@ -872,6 +902,194 @@ def tela_dashboard():
         use_container_width=True
     )
 
+# ══════════════════════════════════════════════════════════════════════════
+# MÓDULO: ROTEIRIZAÇÃO TÁTICA (VRP E FIELD SERVICE)
+# ══════════════════════════════════════════════════════════════════════════
+def calcular_distancia_haversine(lon1, lat1, lon2, lat2):
+    R = 6371.0 # Raio da Terra em Km
+    lon1, lat1, lon2, lat2 = map(math.radians, [lon1, lat1, lon2, lat2])
+    dlon = lon2 - lon1
+    dlat = lat2 - lat1
+    a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+    return R * c
+
+def resolver_tsp_local(ponto_partida, lista_sites):
+    rota = [ponto_partida]
+    nao_visitados = lista_sites.copy()
+    atual = ponto_partida
+    
+    while nao_visitados:
+        proximo = min(nao_visitados, key=lambda x: calcular_distancia_haversine(atual['lon'], atual['lat'], x['lon'], x['lat']))
+        rota.append(proximo)
+        nao_visitados.remove(proximo)
+        atual = proximo
+        
+    return rota
+
+def formatar_tempo(segundos):
+    horas = int(segundos // 3600)
+    minutos = int((segundos % 3600) // 60)
+    return f"{horas}h {minutos}m"
+
+def tela_roteirizacao():
+    banner("ROTEIRIZAÇÃO TÁTICA E FIELD SERVICE")
+    
+    with sqlite3.connect(DB_NAME) as conn:
+        df_sites = pd.read_sql_query("SELECT id, site_id, endereco, latitude, longitude FROM relatorios WHERE latitude != 0.0 AND longitude != 0.0 ORDER BY id DESC", conn)
+    
+    if df_sites.empty:
+        st.info("Nenhum site com coordenadas de GPS cadastrado. Crie laudos com Latitude e Longitude na aba 'Novo Relatório'.")
+        return
+        
+    df_sites = df_sites.drop_duplicates(subset=['site_id']).reset_index(drop=True)
+    lista_opcoes = df_sites['site_id'].tolist()
+    
+    st.markdown("### 📍 Configuração da Rota")
+    c_base, c_sites = st.columns(2)
+    with c_base:
+        site_base = st.selectbox("Ponto de Partida (Base/Hotel):", lista_opcoes)
+    with c_sites:
+        sites_alvo = st.multiselect("Selecione os Sites a Visitar:", [s for s in lista_opcoes if s != site_base])
+        
+    ors_token = st.text_input("Token OpenRouteService (Opcional - Deixe em branco para usar TSP Local):", type="password", help="Gere sua chave gratuita em openrouteservice.org para roteamento real nas vias.")
+    
+    if st.button("🚀 Otimizar Rota de Manutenção", type="primary"):
+        if not sites_alvo:
+            st.error("Selecione pelo menos 1 site para visitar.")
+            return
+            
+        with st.spinner("Calculando sequenciamento ótimo e projetando métricas de Field Service..."):
+            base_row = df_sites[df_sites['site_id'] == site_base].iloc[0]
+            pt_partida = {'id': base_row['site_id'], 'lon': float(base_row['longitude']), 'lat': float(base_row['latitude'])}
+            
+            alvos = []
+            for s in sites_alvo:
+                row = df_sites[df_sites['site_id'] == s].iloc[0]
+                alvos.append({'id': row['site_id'], 'lon': float(row['longitude']), 'lat': float(row['latitude'])})
+                
+            rota_otimizada = resolver_tsp_local(pt_partida, alvos)
+            coords_lista = [[p['lon'], p['lat']] for p in rota_otimizada]
+            nomes_rota = [p['id'] for p in rota_otimizada]
+            
+            distancia_total_km = 0
+            duracao_total_seg = 0
+            geojson_rota = None
+            
+            if ors_token.strip():
+                try:
+                    headers = {
+                        'Accept': 'application/json, application/geo+json, application/gpx+xml, img/png; charset=utf-8',
+                        'Authorization': ors_token.strip(),
+                        'Content-Type': 'application/json; charset=utf-8'
+                    }
+                    payload = {"coordinates": coords_lista}
+                    req = requests.post('https://api.openrouteservice.org/v2/directions/driving-car/geojson', json=payload, headers=headers, timeout=10)
+                    
+                    if req.status_code == 200:
+                        geojson_rota = req.json()
+                        distancia_total_km = geojson_rota['features'][0]['properties']['summary']['distance'] / 1000.0
+                        duracao_total_seg = geojson_rota['features'][0]['properties']['summary']['duration']
+                    else:
+                        st.warning(f"Erro na API ORS (Usando cálculo Haversine): {req.text}")
+                except Exception as e:
+                    st.warning(f"Falha de conexão com a API ORS (Usando cálculo Haversine): {e}")
+
+            if not geojson_rota:
+                for i in range(len(rota_otimizada)-1):
+                    dist_trecho = calcular_distancia_haversine(rota_otimizada[i]['lon'], rota_otimizada[i]['lat'], rota_otimizada[i+1]['lon'], rota_otimizada[i+1]['lat'])
+                    distancia_total_km += dist_trecho
+                
+                duracao_total_seg = (distancia_total_km / 40.0) * 3600
+            
+            secao("KPI", "MÉTRICAS DA OPERAÇÃO DE CAMPO")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{len(sites_alvo)}</div><div class="eng-metric-label">SITES ATENDIDOS</div></div>', unsafe_allow_html=True)
+            m2.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{distancia_total_km:.1f} km</div><div class="eng-metric-label">QUILOMETRAGEM ESTIMADA</div></div>', unsafe_allow_html=True)
+            m3.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{formatar_tempo(duracao_total_seg)}</div><div class="eng-metric-label">WINDSHIELD TIME (DIREÇÃO)</div></div>', unsafe_allow_html=True)
+            
+            densidade = len(sites_alvo) / distancia_total_km if distancia_total_km > 0 else 0
+            m4.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{densidade:.2f}</div><div class="eng-metric-label">DENSIDADE (Sites/Km)</div></div>', unsafe_allow_html=True)
+
+            st.markdown("---")
+            seq_html = " &nbsp; ➔ &nbsp; ".join([f"**{n}**" for n in nomes_rota])
+            st.info(f"**Ordem Operacional Sugerida:** {seq_html}")
+
+            df_rota = pd.DataFrame(rota_otimizada)
+            df_rota['color_rgb'] = [[22, 163, 74, 200] if i == 0 else [0, 48, 135, 200] for i in range(len(df_rota))]
+            df_rota['seq_label'] = ["Base"] + [str(i) for i in range(1, len(df_rota))]
+            
+            view_state = pdk.ViewState(
+                latitude=df_rota['lat'].mean(),
+                longitude=df_rota['lon'].mean(),
+                zoom=11,
+                pitch=0
+            )
+            
+            layers_mapa = [
+                pdk.Layer(
+                    "ScatterplotLayer",
+                    data=df_rota,
+                    get_position="[lon, lat]",
+                    get_color="color_rgb",
+                    get_radius=300,
+                    radiusMinPixels=8,
+                    radiusMaxPixels=16,
+                    pickable=True,
+                    stroked=True,
+                    get_line_color=[255, 255, 255],
+                    lineWidthMinPixels=2
+                ),
+                pdk.Layer(
+                    "TextLayer",
+                    data=df_rota,
+                    get_position="[lon, lat]",
+                    get_text="seq_label",
+                    get_color=[255, 255, 255, 255],
+                    get_size=18,
+                    get_alignment_baseline="'bottom'",
+                    get_pixel_offset=[0, -15],
+                    font_weight="bold"
+                )
+            ]
+            
+            if geojson_rota:
+                layer_linha = pdk.Layer(
+                    "GeoJsonLayer",
+                    data=geojson_rota,
+                    pickable=False,
+                    stroked=True,
+                    filled=False,
+                    extruded=False,
+                    get_line_color=[218, 41, 28, 255],
+                    get_line_width=15,
+                    lineWidthMinPixels=3
+                )
+                layers_mapa.append(layer_linha)
+            else:
+                # Fallback visual caso não utilize a API do ORS, traça linhas retas para exibir o trajeto
+                path_data = pd.DataFrame([{"path": coords_lista}])
+                layer_linha = pdk.Layer(
+                    "PathLayer",
+                    data=path_data,
+                    get_path="path",
+                    get_color=[218, 41, 28, 200],
+                    width_scale=20,
+                    width_min_pixels=3,
+                    get_width=5
+                )
+                layers_mapa.append(layer_linha)
+
+            r = pdk.Deck(
+                layers=layers_mapa,
+                initial_view_state=view_state,
+                tooltip={"text": "Site: {id}"},
+                map_style="road"
+            )
+            
+            st.pydeck_chart(r, use_container_width=True)
+            st.markdown(f"<span style='color:#16A34A;font-weight:bold;'>🟢 Base/Origem</span> &nbsp;&nbsp; | &nbsp;&nbsp; <span style='color:{COR_AZUL};font-weight:bold;'>🔵 Site Alvo</span>", unsafe_allow_html=True)
+
 # ==============================================================================
 # ENTRY POINT
 # ==============================================================================
@@ -894,8 +1112,9 @@ with st.sidebar:
     tec = st.text_input("👷 TÉCNICO EM CAMPO:", value=st.session_state.get("_tecnico_global", ""), placeholder="Seu nome", key="_tec_sidebar_rel")
     if tec.strip(): st.session_state["_tecnico_global"] = tec.strip()
     st.markdown("---")
-    menu = st.radio("NAVEGAÇÃO:", ["📝 NOVO RELATÓRIO", "🔍 PESQUISAR E EXPORTAR", "📊 DASHBOARD"], label_visibility="collapsed")
+    menu = st.radio("NAVEGAÇÃO:", ["📝 NOVO RELATÓRIO", "🔍 PESQUISAR E EXPORTAR", "📊 DASHBOARD", "🗺️ ROTEIRIZAÇÃO TÁTICA"], label_visibility="collapsed")
 
 if menu == "📝 NOVO RELATÓRIO": tela_novo()
 elif menu == "🔍 PESQUISAR E EXPORTAR": tela_pesquisa()
 elif menu == "📊 DASHBOARD": tela_dashboard()
+elif menu == "🗺️ ROTEIRIZAÇÃO TÁTICA": tela_roteirizacao()
