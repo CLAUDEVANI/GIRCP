@@ -1,6 +1,6 @@
 """
 GIRCP — Gerador Inteligente de Relatórios e Controle Fotográfico
-| v3.4.1 (Módulo de Roteirização ORS com Numeração Sequencial)
+| v3.4.3 (Roteirização com Numeração WebGL Segura)
 """
 
 import streamlit as st
@@ -1017,7 +1017,10 @@ def tela_roteirizacao():
 
             df_rota = pd.DataFrame(rota_otimizada)
             df_rota['color_rgb'] = [[22, 163, 74, 200] if i == 0 else [0, 48, 135, 200] for i in range(len(df_rota))]
-            df_rota['seq_label'] = ["Base"] + [str(i) for i in range(1, len(df_rota))]
+            
+            # Formatação explícita de String ('0', '1', '2'...)
+            df_rota['seq_label'] = ["0"] + [str(i) for i in range(1, len(df_rota))]
+            df_rota['seq_label'] = df_rota['seq_label'].astype(str)
             
             view_state = pdk.ViewState(
                 latitude=df_rota['lat'].mean(),
@@ -1033,11 +1036,11 @@ def tela_roteirizacao():
                     get_position="[lon, lat]",
                     get_color="color_rgb",
                     get_radius=300,
-                    radiusMinPixels=8,
-                    radiusMaxPixels=16,
+                    radiusMinPixels=15, 
+                    radiusMaxPixels=25,
                     pickable=True,
                     stroked=True,
-                    get_line_color=[255, 255, 255],
+                    get_line_color=[255, 255, 255, 200],
                     lineWidthMinPixels=2
                 ),
                 pdk.Layer(
@@ -1046,10 +1049,10 @@ def tela_roteirizacao():
                     get_position="[lon, lat]",
                     get_text="seq_label",
                     get_color=[255, 255, 255, 255],
-                    get_size=18,
-                    get_alignment_baseline="'bottom'",
-                    get_pixel_offset=[0, -15],
-                    font_weight="bold"
+                    get_size=22, 
+                    sizeScale=1,
+                    get_alignment_baseline="'center'",
+                    get_text_anchor="'middle'"
                 )
             ]
             
@@ -1067,7 +1070,6 @@ def tela_roteirizacao():
                 )
                 layers_mapa.append(layer_linha)
             else:
-                # Fallback visual caso não utilize a API do ORS, traça linhas retas para exibir o trajeto
                 path_data = pd.DataFrame([{"path": coords_lista}])
                 layer_linha = pdk.Layer(
                     "PathLayer",
@@ -1088,7 +1090,7 @@ def tela_roteirizacao():
             )
             
             st.pydeck_chart(r, use_container_width=True)
-            st.markdown(f"<span style='color:#16A34A;font-weight:bold;'>🟢 Base/Origem</span> &nbsp;&nbsp; | &nbsp;&nbsp; <span style='color:{COR_AZUL};font-weight:bold;'>🔵 Site Alvo</span>", unsafe_allow_html=True)
+            st.markdown(f"<span style='color:#16A34A;font-weight:bold;'>🟢 Base/Origem (0)</span> &nbsp;&nbsp; | &nbsp;&nbsp; <span style='color:{COR_AZUL};font-weight:bold;'>🔵 Sites Alvo (Sequência)</span>", unsafe_allow_html=True)
 
 # ==============================================================================
 # ENTRY POINT
