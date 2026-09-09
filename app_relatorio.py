@@ -590,11 +590,11 @@ def _render_item_edicao(f, k, lid, prefixo, total_fotos, db_field):
         nc = st.text_area(LBL_DESCRICAO, value=f.get('comentarios', ''), key=f"{prefixo}c_{lid}_{fid}", height=65)
     with col_ctrl:
         st.markdown("<br>", unsafe_allow_html=True)
-        if k > 0 and st.form_submit_button("⬆️", key=f"{prefixo}up_{lid}_{fid}"):
+        if k > 0 and st.button("⬆️", key=f"{prefixo}up_{lid}_{fid}"):
             _executar_acao_inline(lid, fid, "up", prefixo, db_field); st.rerun()
-        if k < total_fotos-1 and st.form_submit_button("⬇️", key=f"{prefixo}dn_{lid}_{fid}"):
+        if k < total_fotos-1 and st.button("⬇️", key=f"{prefixo}dn_{lid}_{fid}"):
             _executar_acao_inline(lid, fid, "down", prefixo, db_field); st.rerun()
-        if st.form_submit_button("❌", key=f"{prefixo}del_{lid}_{fid}"):
+        if st.button("❌", key=f"{prefixo}del_{lid}_{fid}"):
             _executar_acao_inline(lid, fid, "del", prefixo, db_field); st.rerun()
     fc = f.copy(); fc['titulo'] = nt; fc['comentarios'] = nc
     return fc
@@ -693,21 +693,31 @@ def _processar_acoes_relatorio(state: dict):
     if state["salvar"]: _salvar_edicoes(lid, state)
 
 def _render_dados_cadastrais_form(row, lid, fotos_db, extras_db):
-    with st.form(f"form_ed_{lid}"):
-        cad = _render_cadastrais(row, lid)
-        fotos_edit = _render_edicao_lista(fotos_db, lid, "EDITAR EVIDÊNCIAS", "📸", "f")
-        extras_edit = _render_edicao_lista(extras_db, lid, "EDITAR ANEXOS", "📎", "e")
-        novas = _render_novas_fotos(lid, fotos_db + extras_db)
-        salvar = st.form_submit_button("🔄  SALVAR ALTERAÇÕES", type="primary", use_container_width=True)
+    cad = _render_cadastrais(row, lid)
+    fotos_edit = _render_edicao_lista(fotos_db, lid, "EDITAR EVIDÊNCIAS", "📸", "f")
+    extras_edit = _render_edicao_lista(extras_db, lid, "EDITAR ANEXOS", "📎", "e")
+    novas = _render_novas_fotos(lid, fotos_db + extras_db)
+    salvar = st.button("🔄  SALVAR ALTERAÇÕES", type="primary", use_container_width=True, key=f"salvar_{lid}")
     return {"lid": lid, "row": row, "salvar": salvar, "fotos_db": fotos_db, "extras_db": extras_db, "fotos_edit": fotos_edit, "extras_edit": extras_edit, "novas": novas, "cad": cad}
 
 def _render_relatorio_expander(row):
     lid = row['id']
-    fotos_db = json.loads(row['fotos_json'] or "[]")
-    extras_db = json.loads(row['extras_json'] or "[]") if 'extras_json' in row.keys() else []
-    with st.expander(f"📍 **{sanitizar(row['site_id'])}**  |  {sanitizar(row['data_hora'])}  |  ID #{lid}"):
-        state = _render_dados_cadastrais_form(row, lid, fotos_db, extras_db)
-        _processar_acoes_relatorio(state)
+    exp_key = f"exp_aberto_{lid}"
+    if exp_key not in st.session_state:
+        st.session_state[exp_key] = False
+
+    aberto = st.session_state[exp_key]
+    icone = "🔽" if aberto else "▶️"
+    if st.button(f"{icone}  📍 {sanitizar(row['site_id'])}  |  {sanitizar(row['data_hora'])}  |  ID #{lid}", key=f"toggle_{lid}", use_container_width=True):
+        st.session_state[exp_key] = not aberto
+        st.rerun()
+
+    if st.session_state[exp_key]:
+        fotos_db = json.loads(row['fotos_json'] or "[]")
+        extras_db = json.loads(row['extras_json'] or "[]") if 'extras_json' in row.keys() else []
+        with st.container(border=True):
+            state = _render_dados_cadastrais_form(row, lid, fotos_db, extras_db)
+            _processar_acoes_relatorio(state)
 
 def tela_pesquisa():
     banner("PESQUISAR, EDITAR E EXPORTAR")
