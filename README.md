@@ -1,6 +1,6 @@
 # ⚡ GIRCP - Gerador Inteligente de Relatórios e Controle Fotográfico
 
-Este projeto é uma aplicação web de missão crítica desenvolvida em Python com Streamlit para a criação, edição, gerenciamento analítico e exportação de relatórios fotográficos técnicos (laudos corporativos) em formato PDF, seguindo os padrões de excelência Engemon OpServices.
+Este projeto é uma aplicação web de missão crítica desenvolvida em Python com Streamlit para a criação, edição, gerenciamento analítico e exportação de relatórios fotográficos técnicos (laudos corporativos) em formato PDF, seguindo os padrões de excelência.
 
 ## ✨ O que há de novo na v3.4.1?
 A versão 3.4.1 trouxe um salto de maturidade tática e de segurança para o sistema, incorporando inteligência logística e renderização antibloqueio:
