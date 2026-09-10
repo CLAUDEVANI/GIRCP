@@ -20,6 +20,9 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 from PIL import Image
 from weasyprint import HTML
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 # ==============================================================================
 # 0. CONTROLE DE ACESSO E SEGURANÇA (LGPD)
@@ -185,6 +188,8 @@ def gerar_pdf(dados: dict, fotos: list, extras: list = None) -> tuple[bytes, str
         cat  = sanitizar(f.get('categoria', 'Geral'))
         sev_norm = sev.replace('ã','a').replace('Ã','A')
         badge_html = f'<span class="badge {cls_b}">{sanitizar(sev)}</span>' if sev_norm not in ('Normal', '') else ''
+        mat  = sanitizar(f.get('material_necessario', '').strip())
+        mat_html_bloco = f'<div class="label-desc" style="margin-top:8px;color:#DA291C;">🔧 Material Necessário:</div><div class="foto-desc" style="border-left-color:#DA291C;">{mat}</div>' if mat else ''
         fotos_html += f"""
         <table class="card-evidencia">
           <tr>
@@ -196,6 +201,7 @@ def gerar_pdf(dados: dict, fotos: list, extras: list = None) -> tuple[bytes, str
               <span style="font-size:7.5pt;color:{COR_CINZA};margin-left:6px;">{cat}</span>
               <div class="label-desc" style="margin-top:6px;">Descrição Técnica:</div>
               <div class="foto-desc">{desc}</div>
+              {mat_html_bloco}
             </td>
           </tr>
         </table>"""
@@ -257,6 +263,9 @@ def aplicar_estilo():
     .eng-banner-title {{ font-size: 22px; font-weight: 900; letter-spacing: 1.2px; text-transform: uppercase; }}
     .eng-banner-badge {{ background: {COR_VERMELHO}; color: #fff; padding: 5px 14px; border-radius: 20px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; }}
     .eng-section {{ background: {COR_AZUL}; color: #fff; padding: 10px 18px; border-radius: 6px; margin: 24px 0 14px 0; font-weight: 700; font-size: 13px; text-transform: uppercase; border-left: 5px solid {COR_VERMELHO}; }}
+    .eng-metric {{ background: #fff; border: 1.5px solid {COR_BORDA}; border-radius: 8px; padding: 14px 10px; text-align: center; }}
+    .eng-metric-val {{ font-size: 26px; font-weight: 900; color: {COR_AZUL}; line-height: 1.1; }}
+    .eng-metric-label {{ font-size: 10px; color: {COR_CINZA}; text-transform: uppercase; margin-top: 4px; letter-spacing: 0.5px; }}
     </style>""", unsafe_allow_html=True)
 
 def banner(subtitulo: str = ""):
@@ -482,6 +491,7 @@ def tela_novo():
                 with c_dados:
                     tit = st.text_input(LBL_TITULO, key=f"t_{safe_key}")
                     com = st.text_area(LBL_DESCRICAO, key=f"c_{safe_key}", height=75)
+                    mat = st.text_input("🔧 MATERIAL NECESSÁRIO", key=f"mat_{safe_key}", placeholder="Ex: Cabo 6mm², Disjuntor 40A...")
                     c_sev, c_cat = st.columns(2)
                     with c_sev: sev = st.selectbox("SEVERIDADE", ["Normal", "Observacao", "Critico"], key=f"sev_{safe_key}")
                     with c_cat: cat = st.selectbox("CATEGORIA",  ["Geral", "Antes", "Depois", "Detalhe"], key=f"cat_{safe_key}")
@@ -490,6 +500,7 @@ def tela_novo():
                         "foto_id": foto_id, "caminho": caminho_foto, "type": "image/jpeg",
                         "titulo": tit.strip() or f"Evidência {idx+1}", "comentarios": com.strip() or "N/A",
                         "filename": arquivo.name, "severidade": sev, "categoria": cat,
+                        "material_necessario": mat.strip(),
                     })
 
         secao("📎", "3. ANEXOS ADICIONAIS")
@@ -556,8 +567,10 @@ def _executar_acao_inline(lid, fid, acao, prefixo, db_field):
             cfid = fotos[i].get("foto_id", fotos[i].get("base64", "")[:16])
             t_val = st.session_state.get(f"{prefixo}t_{lid}_{cfid}")
             c_val = st.session_state.get(f"{prefixo}c_{lid}_{cfid}")
+            m_val = st.session_state.get(f"{prefixo}m_{lid}_{cfid}")
             if t_val is not None: fotos[i]["titulo"] = t_val
             if c_val is not None: fotos[i]["comentarios"] = c_val
+            if m_val is not None: fotos[i]["material_necessario"] = m_val
         
         k = next((i for i, f in enumerate(fotos) if f.get("foto_id", f.get("base64", "")[:16]) == fid), -1)
         if k != -1:
@@ -590,6 +603,7 @@ def _render_item_edicao(f, k, lid, prefixo, total_fotos, db_field):
     with col_d:
         nt = st.text_input(LBL_TITULO, value=f.get('titulo', ''), key=f"{prefixo}t_{lid}_{fid}")
         nc = st.text_area(LBL_DESCRICAO, value=f.get('comentarios', ''), key=f"{prefixo}c_{lid}_{fid}", height=65)
+        nm = st.text_input("🔧 MATERIAL NECESSÁRIO", value=f.get('material_necessario', ''), key=f"{prefixo}m_{lid}_{fid}", placeholder="Ex: Cabo 6mm², Disjuntor 40A...")
     with col_ctrl:
         st.markdown("<br>", unsafe_allow_html=True)
         if k > 0 and st.button("⬆️", key=f"{prefixo}up_{lid}_{fid}"):
@@ -598,7 +612,7 @@ def _render_item_edicao(f, k, lid, prefixo, total_fotos, db_field):
             _executar_acao_inline(lid, fid, "down", prefixo, db_field); st.rerun()
         if st.button("❌", key=f"{prefixo}del_{lid}_{fid}"):
             _executar_acao_inline(lid, fid, "del", prefixo, db_field); st.rerun()
-    fc = f.copy(); fc['titulo'] = nt; fc['comentarios'] = nc
+    fc = f.copy(); fc['titulo'] = nt; fc['comentarios'] = nc; fc['material_necessario'] = nm
     return fc
 
 def _render_edicao_lista(fotos, lid, titulo_sec, icone, prefixo):
@@ -825,63 +839,137 @@ def tela_dashboard():
     st.markdown("---")
     
     secao("🌍", "MAPA TÁTICO DE VISTORIAS (GEOLOCALIZAÇÃO)")
-    
+
+    # ── Seletor de status ───────────────────────────────────────────────────
+    col_st1, col_st2 = st.columns([2, 1])
+    with col_st1:
+        status_opcoes = ["Todos", "✅ Concluída", "⚙️ Em Andamento", "🕐 Pendente"]
+        status_filtro = st.radio("Exibir visitas:", status_opcoes, horizontal=True, key="mapa_status_filtro")
+    with col_st2:
+        st.markdown(
+            f"""<div style='background:#fff;border:1px solid {COR_BORDA};border-radius:8px;padding:10px 14px;font-size:11px;line-height:1.8;'>
+            <span style='color:#16A34A;font-size:15px;'>●</span> <b>Concluída</b> — relatório com fotos<br>
+            <span style='color:#D97706;font-size:15px;'>●</span> <b>Em Andamento</b> — sem fotos ainda<br>
+            <span style='color:#64748B;font-size:15px;'>●</span> <b>Pendente</b> — sem visita registrada<br>
+            <span style='color:#DA291C;font-size:15px;'>◆</span> <b>Anomalia crítica</b> detectada
+            </div>""",
+            unsafe_allow_html=True
+        )
+
     df_mapa = df_filtrado.copy()
     if 'latitude' in df_mapa.columns and 'longitude' in df_mapa.columns:
-        df_mapa['latitude'] = pd.to_numeric(df_mapa['latitude'], errors='coerce')
+        df_mapa['latitude']  = pd.to_numeric(df_mapa['latitude'],  errors='coerce')
         df_mapa['longitude'] = pd.to_numeric(df_mapa['longitude'], errors='coerce')
         df_mapa = df_mapa.dropna(subset=['latitude', 'longitude'])
         df_mapa = df_mapa[(df_mapa['latitude'] != 0.0) & (df_mapa['longitude'] != 0.0)].reset_index(drop=True)
 
+        # ── Calcular status e cor por ponto ────────────────────────────────
         cores_mapa_filtrado = []
-        for _, r in df_mapa.iterrows():
+        status_lista        = []
+        tem_critico_lista   = []
+
+        for _, row_m in df_mapa.iterrows():
+            fotos_row = json.loads(row_m['fotos_json'] or '[]')
             tem_critico = any(
-                {'Crítico': 'Critico', 'Observação': 'Observacao'}.get(f.get('severidade', 'Normal'), f.get('severidade', 'Normal')) == 'Critico'
-                for f in json.loads(r['fotos_json'] or '[]')
+                {'Crítico': 'Critico', 'Observação': 'Observacao'}.get(
+                    f.get('severidade', 'Normal'), f.get('severidade', 'Normal')
+                ) == 'Critico'
+                for f in fotos_row
             )
-            cores_mapa_filtrado.append([218, 41, 28, 200] if tem_critico else [0, 48, 135, 200])
-            
-        df_mapa['color_rgb'] = cores_mapa_filtrado
+            tem_critico_lista.append(tem_critico)
+
+            if len(fotos_row) > 0:
+                status = "Concluída"
+                cor    = [218, 41, 28, 220] if tem_critico else [22, 163, 74, 220]
+            else:
+                status = "Em Andamento"
+                cor    = [217, 119, 6, 220]
+
+            status_lista.append(status)
+            cores_mapa_filtrado.append(cor)
+
+        df_mapa['status_visita'] = status_lista
+        df_mapa['color_rgb']     = cores_mapa_filtrado
+        df_mapa['tem_critico']   = tem_critico_lista
+        df_mapa['icone_status']  = df_mapa['status_visita'].map({
+            "Concluída":    "✅",
+            "Em Andamento": "⚙️",
+            "Pendente":     "🕐",
+        })
+        df_mapa['alerta_critico'] = df_mapa['tem_critico'].apply(lambda x: "⚠️ ANOMALIA CRÍTICA" if x else "")
+
+        # ── Aplicar filtro de status ───────────────────────────────────────
+        if status_filtro == "✅ Concluída":
+            df_mapa = df_mapa[df_mapa['status_visita'] == "Concluída"]
+        elif status_filtro == "⚙️ Em Andamento":
+            df_mapa = df_mapa[df_mapa['status_visita'] == "Em Andamento"]
+        elif status_filtro == "🕐 Pendente":
+            df_mapa = df_mapa[df_mapa['status_visita'] == "Pendente"]
+
+        # ── Contadores por status ──────────────────────────────────────────
+        total_df = df_filtrado.copy()
+        total_df['fotos_row'] = total_df['fotos_json'].apply(lambda x: json.loads(x or '[]'))
+        n_concluidas   = total_df['fotos_row'].apply(lambda f: len(f) > 0).sum()
+        n_andamento    = total_df['fotos_row'].apply(lambda f: len(f) == 0).sum()
+
+        mc1, mc2, mc3 = st.columns(3)
+        mc1.markdown(f'<div class="eng-metric"><div class="eng-metric-val" style="color:#16A34A;">{n_concluidas}</div><div class="eng-metric-label">CONCLUÍDAS</div></div>', unsafe_allow_html=True)
+        mc2.markdown(f'<div class="eng-metric"><div class="eng-metric-val" style="color:#D97706;">{n_andamento}</div><div class="eng-metric-label">EM ANDAMENTO</div></div>', unsafe_allow_html=True)
+        mc3.markdown(f'<div class="eng-metric"><div class="eng-metric-val" style="color:#DA291C;">{int(df_filtrado["fotos_json"].apply(lambda x: any({"Crítico":"Critico","Observação":"Observacao"}.get(f.get("severidade","Normal"),f.get("severidade","Normal"))=="Critico" for f in json.loads(x or "[]"))).sum())}</div><div class="eng-metric-label">C/ ANOMALIA CRÍTICA</div></div>', unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
 
         if not df_mapa.empty:
             view_state = pdk.ViewState(
                 latitude=df_mapa['latitude'].mean(),
                 longitude=df_mapa['longitude'].mean(),
-                zoom=10,
+                zoom=11,
                 pitch=0
             )
 
-            layer = pdk.Layer(
+            layer_pontos = pdk.Layer(
                 "ScatterplotLayer",
                 data=df_mapa,
                 get_position="[longitude, latitude]",
                 get_color="color_rgb",
-                get_radius=200,
-                radiusMinPixels=8,
-                radiusMaxPixels=16,
+                get_radius=220,
+                radiusMinPixels=10,
+                radiusMaxPixels=20,
                 pickable=True,
                 stroked=True,
-                get_line_color=[255, 255, 255],
+                get_line_color=[255, 255, 255, 200],
                 lineWidthMinPixels=2
             )
-            
+
             tooltip = {
-                "html": "<b>📍 Site: {site_id}</b><br>👷 Técnico: {tecnico}<br>📅 Data: {data_hora}<br>🏠 {endereco}",
-                "style": {"backgroundColor": "#002060", "color": "white", "borderRadius": "6px", "padding": "10px"}
+                "html": (
+                    "<div style='font-family:sans-serif;min-width:200px;'>"
+                    "<b style='font-size:13px;'>📍 {site_id}</b><br>"
+                    "<span style='font-size:11px;'>{icone_status} <b>{status_visita}</b></span>"
+                    "<span style='color:#DA291C;font-weight:bold;'> {alerta_critico}</span><br>"
+                    "👷 {tecnico}<br>📅 {data_hora}<br>🏠 {endereco}"
+                    "</div>"
+                ),
+                "style": {
+                    "backgroundColor": "#002060",
+                    "color": "white",
+                    "borderRadius": "8px",
+                    "padding": "12px",
+                    "fontSize": "12px"
+                }
             }
-            
+
             r = pdk.Deck(
-                layers=[layer],
+                layers=[layer_pontos],
                 initial_view_state=view_state,
                 tooltip=tooltip,
                 map_style="road"
             )
 
             st.pydeck_chart(r, use_container_width=True)
-                
-            st.markdown(f"<span style='color:{COR_AZUL};font-weight:bold;'>🔵 Operação Normal</span> &nbsp;&nbsp; | &nbsp;&nbsp; <span style='color:{COR_VERMELHO};font-weight:bold;'>🔴 Contém Anomalia Crítica</span>", unsafe_allow_html=True)
+
         else:
-            st.info("💡 Nenhum relatório filtrado possui coordenadas de GPS salvas para plotagem no mapa.")
+            st.info(f"💡 Nenhuma visita com status '{status_filtro}' possui coordenadas de GPS cadastradas.")
     else:
         st.info("💡 O banco de dados atual não possui as colunas de Latitude/Longitude preenchidas.")
 
@@ -1103,6 +1191,370 @@ def tela_roteirizacao():
             
             st.pydeck_chart(r, use_container_width=True)
             st.markdown(f"<span style='color:#16A34A;font-weight:bold;'>🟢 Base/Origem (0)</span> &nbsp;&nbsp; | &nbsp;&nbsp; <span style='color:{COR_AZUL};font-weight:bold;'>🔵 Sites Alvo (Sequência)</span>", unsafe_allow_html=True)
+
+            # ── Salvar rota no session_state para persistir entre reruns ───
+            st.session_state["_rota_resultado"] = {
+                "rota": rota_otimizada,
+                "distancia_km": distancia_total_km,
+                "duracao_seg": duracao_total_seg,
+            }
+            st.session_state.pop("_rota_pdf_bytes", None)
+            st.session_state.pop("_rota_xlsx_bytes", None)
+
+    # ── Painel persistente: evidências + exportação ────────────────────────
+    if st.session_state.get("_rota_resultado"):
+        _res = st.session_state["_rota_resultado"]
+        rota_salva       = _res["rota"]
+        dist_salva       = _res["distancia_km"]
+        dur_salva        = _res["duracao_seg"]
+        tecnico_rota     = st.session_state.get("_tecnico_global", "N/I")
+
+        st.markdown("---")
+        secao("📸", "EVIDÊNCIAS POR SITE — APONTAMENTO DE MATERIAIS")
+
+        # Busca evidências com LIKE para tolerar variações de maiúsculas/espaços
+        evidencias_por_site = {}
+        with sqlite3.connect(DB_NAME) as conn_ev:
+            for p_ev in rota_salva[1:]:
+                sid_ev = p_ev['id']
+                row_ev = conn_ev.execute(
+                    "SELECT fotos_json FROM relatorios WHERE TRIM(UPPER(site_id)) = TRIM(UPPER(?)) ORDER BY id DESC LIMIT 1",
+                    (sid_ev,)
+                ).fetchone()
+                fotos_ev = json.loads(row_ev[0]) if row_ev and row_ev[0] else []
+                evidencias_por_site[sid_ev] = fotos_ev
+
+        total_criticos_ui = sum(
+            1 for evs in evidencias_por_site.values()
+            for ev in evs if ev.get('severidade', '') in ('Critico', 'Crítico')
+        )
+        total_obs_ui = sum(
+            1 for evs in evidencias_por_site.values()
+            for ev in evs if ev.get('severidade', '') in ('Observacao', 'Observação')
+        )
+        total_fotos_ui = sum(len(evs) for evs in evidencias_por_site.values())
+
+        sc1, sc2, sc3 = st.columns(3)
+        sc1.markdown(f'<div class="eng-metric"><div class="eng-metric-val" style="color:#DA291C;">{total_criticos_ui}</div><div class="eng-metric-label">EVIDÊNCIAS CRÍTICAS</div></div>', unsafe_allow_html=True)
+        sc2.markdown(f'<div class="eng-metric"><div class="eng-metric-val" style="color:#D97706;">{total_obs_ui}</div><div class="eng-metric-label">OBSERVAÇÕES</div></div>', unsafe_allow_html=True)
+        sc3.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{total_fotos_ui}</div><div class="eng-metric-label">TOTAL DE EVIDÊNCIAS</div></div>', unsafe_allow_html=True)
+
+        if total_fotos_ui == 0:
+            st.info("ℹ️ Nenhuma evidência fotográfica encontrada para os sites selecionados. Os relatórios desses sites podem não ter fotos cadastradas.")
+        else:
+            st.markdown("**Aponte os materiais necessários para cada evidência antes de exportar:**")
+
+        for seq_idx, p_site in enumerate(rota_salva[1:], 1):
+            sid = p_site['id']
+            evs = evidencias_por_site.get(sid, [])
+            with st.expander(f"📍 [{seq_idx:02d}] {sid} — {len(evs)} evidência(s)", expanded=(len(evs) > 0 and seq_idx == 1)):
+                if not evs:
+                    st.info("Nenhuma evidência fotográfica registrada para este site.")
+                    continue
+                for ev_idx, ev in enumerate(evs):
+                    sev = ev.get('severidade', 'Normal')
+                    cor_sev = COR_VERMELHO if sev in ('Critico','Crítico') else (COR_AMARELO if sev in ('Observacao','Observação') else COR_VERDE)
+                    col_img, col_info = st.columns([1, 3])
+                    b64_ev = _obter_b64_de_foto(ev)
+                    if b64_ev:
+                        col_img.markdown(f'<img src="data:image/jpeg;base64,{b64_ev}" style="width:100%;border-radius:6px;border:2px solid {cor_sev};"/>', unsafe_allow_html=True)
+                    with col_info:
+                        st.markdown(f"**{sanitizar(ev.get('titulo','Evidência'))}** &nbsp; <span style='background:{cor_sev};color:#fff;padding:1px 8px;border-radius:10px;font-size:11px;'>{sanitizar(sev)}</span>", unsafe_allow_html=True)
+                        st.caption(sanitizar(ev.get('comentarios', '')))
+                        mat_key = f"mat_{sid}_{ev_idx}"
+                        mat_val = st.text_input(
+                            "🔧 Material necessário para correção:",
+                            value=st.session_state.get(mat_key, ev.get('material_necessario', '')),
+                            placeholder="Ex: Cabo 6mm², Disjuntor 40A, Conector tipo Y...",
+                            key=mat_key
+                        )
+                        ev['material_necessario'] = mat_val
+                    st.markdown("---")
+
+        # ── Exportação ─────────────────────────────────────────────────────
+        st.markdown("---")
+        secao("📤", "EXPORTAR ROTEIRO")
+
+        col_pdf, col_xlsx = st.columns(2)
+
+        with col_pdf:
+            if st.button("📄 Gerar PDF do Roteiro", type="primary", use_container_width=True):
+                with st.spinner("Gerando PDF..."):
+                    _pb, _pn = gerar_pdf_rota(
+                        rota_salva, dist_salva, dur_salva,
+                        tecnico_rota, evidencias_por_site
+                    )
+                st.session_state["_rota_pdf_bytes"] = _pb
+                st.session_state["_rota_pdf_nome"]  = _pn
+                st.rerun()
+
+            if st.session_state.get("_rota_pdf_bytes"):
+                st.download_button(
+                    label="⬇️ Baixar PDF",
+                    data=st.session_state["_rota_pdf_bytes"],
+                    file_name=st.session_state["_rota_pdf_nome"],
+                    mime="application/pdf",
+                    use_container_width=True,
+                    key="dl_pdf_rota"
+                )
+
+        with col_xlsx:
+            if st.button("📊 Gerar Planilha Excel", use_container_width=True):
+                with st.spinner("Gerando Excel..."):
+                    _xb, _xn = gerar_excel_rota(
+                        rota_salva, dist_salva, dur_salva,
+                        tecnico_rota, evidencias_por_site
+                    )
+                st.session_state["_rota_xlsx_bytes"] = _xb
+                st.session_state["_rota_xlsx_nome"]  = _xn
+                st.rerun()
+
+            if st.session_state.get("_rota_xlsx_bytes"):
+                st.download_button(
+                    label="⬇️ Baixar Excel",
+                    data=st.session_state["_rota_xlsx_bytes"],
+                    file_name=st.session_state["_rota_xlsx_nome"],
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key="dl_xlsx_rota"
+                )
+
+# ==============================================================================
+# EXPORTAÇÃO DA ROTEIRIZAÇÃO
+# ==============================================================================
+def _css_rota_pdf() -> str:
+    return f"""
+    @page {{ size: A4; margin: 14mm 14mm 18mm 14mm;
+        @bottom-left {{ content: "GIRCP — Roteirização Tática • Uso Interno"; font-size: 7pt; color: {COR_CINZA}; font-family: 'Segoe UI', Arial, sans-serif; }}
+        @bottom-right {{ content: "Página " counter(page) " de " counter(pages); font-size: 7pt; color: {COR_CINZA}; font-family: 'Segoe UI', Arial, sans-serif; }}
+    }}
+    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{ font-family: 'Segoe UI', Helvetica, Arial, sans-serif; color: {COR_TEXTO}; font-size: 9.5pt; line-height: 1.5; background: #fff; }}
+    .page-header {{ display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 3px solid {COR_AZUL}; padding-bottom: 10px; margin-bottom: 22px; }}
+    .header-titulo {{ color: {COR_AZUL}; font-size: 18pt; font-weight: 900; text-transform: uppercase; letter-spacing: 0.8px; }}
+    .header-acento {{ display: inline-block; width: 36px; height: 4px; background: {COR_VERMELHO}; margin-bottom: 4px; }}
+    .header-data {{ text-align: right; color: {COR_CINZA}; font-size: 9pt; }}
+    .kpi-grid {{ display: flex; gap: 12px; margin-bottom: 22px; }}
+    .kpi-box {{ flex: 1; border: 1.5px solid {COR_BORDA}; border-radius: 6px; padding: 12px 10px; text-align: center; background: {COR_AZUL_LIGHT}; }}
+    .kpi-val {{ font-size: 18pt; font-weight: 900; color: {COR_AZUL}; }}
+    .kpi-lbl {{ font-size: 7pt; color: {COR_CINZA}; text-transform: uppercase; margin-top: 2px; }}
+    .section-header {{ background: {COR_AZUL}; color: #fff; font-weight: 700; font-size: 10pt; padding: 7px 14px; margin-top: 22px; margin-bottom: 14px; text-transform: uppercase; border-left: 5px solid {COR_VERMELHO}; border-radius: 2px; }}
+    .seq-table {{ width: 100%; border-collapse: collapse; margin-bottom: 18px; }}
+    .seq-table th {{ background: {COR_AZUL}; color: #fff; padding: 8px 10px; font-size: 8.5pt; text-align: left; }}
+    .seq-table td {{ border: 1px solid {COR_BORDA}; padding: 8px 10px; font-size: 9pt; vertical-align: top; }}
+    .seq-table tr:nth-child(even) td {{ background: {COR_AZUL_LIGHT}; }}
+    .badge-base {{ background: #16A34A; color: #fff; padding: 1px 8px; border-radius: 10px; font-size: 7pt; font-weight: 700; }}
+    .badge-site {{ background: {COR_AZUL}; color: #fff; padding: 1px 8px; border-radius: 10px; font-size: 7pt; font-weight: 700; }}
+    .mat-table {{ width: 100%; border-collapse: collapse; margin-bottom: 10px; page-break-inside: avoid; }}
+    .mat-table th {{ background: {COR_AZUL_MED}; color: #fff; padding: 6px 10px; font-size: 8pt; text-align: left; }}
+    .mat-table td {{ border: 1px solid {COR_BORDA}; padding: 6px 10px; font-size: 8.5pt; vertical-align: top; }}
+    .mat-table tr:nth-child(even) td {{ background: {COR_CINZA_LIGHT}; }}
+    .badge-critico {{ background: #DA291C; color: #fff; padding: 1px 7px; border-radius: 10px; font-size: 7pt; font-weight: 700; }}
+    .badge-obs {{ background: #D97706; color: #fff; padding: 1px 7px; border-radius: 10px; font-size: 7pt; font-weight: 700; }}
+    .badge-normal {{ background: #16A34A; color: #fff; padding: 1px 7px; border-radius: 10px; font-size: 7pt; font-weight: 700; }}
+    .foto-thumb {{ width: 80px; height: 60px; object-fit: cover; border-radius: 3px; }}
+    """
+
+def gerar_pdf_rota(rota_otimizada, distancia_km, duracao_seg, tecnico, evidencias_por_site) -> tuple[bytes, str]:
+    """Gera PDF da roteirização com KPIs, sequenciamento e painel de materiais/evidências."""
+    densidade = len(rota_otimizada[1:]) / distancia_km if distancia_km > 0 else 0
+    kpi_html = f"""
+    <div class="kpi-grid">
+        <div class="kpi-box"><div class="kpi-val">{len(rota_otimizada)-1}</div><div class="kpi-lbl">Sites Atendidos</div></div>
+        <div class="kpi-box"><div class="kpi-val">{distancia_km:.1f} km</div><div class="kpi-lbl">Quilometragem Est.</div></div>
+        <div class="kpi-box"><div class="kpi-val">{formatar_tempo(duracao_seg)}</div><div class="kpi-lbl">Windshield Time</div></div>
+        <div class="kpi-box"><div class="kpi-val">{densidade:.2f}</div><div class="kpi-lbl">Sites/Km</div></div>
+    </div>"""
+
+    seq_rows = ""
+    for i, p in enumerate(rota_otimizada):
+        badge = '<span class="badge-base">BASE</span>' if i == 0 else f'<span class="badge-site">{i:02d}</span>'
+        seq_rows += f"""<tr>
+            <td style="text-align:center;">{badge}</td>
+            <td><strong>{sanitizar(p['id'])}</strong></td>
+            <td style="font-size:8pt;color:{COR_CINZA};">{p.get('lat', ''):.6f}, {p.get('lon', ''):.6f}</td>
+        </tr>"""
+
+    mat_html = ""
+    total_criticos = 0
+    total_obs = 0
+    total_normal = 0
+    for site_id, evidencias in evidencias_por_site.items():
+        if not evidencias:
+            continue
+        rows_ev = ""
+        for ev in evidencias:
+            sev = ev.get('severidade', 'Normal')
+            cls_b = {'Crítico': 'badge-critico', 'Critico': 'badge-critico', 'Observação': 'badge-obs', 'Observacao': 'badge-obs'}.get(sev, 'badge-normal')
+            if sev in ('Critico', 'Crítico'): total_criticos += 1
+            elif sev in ('Observacao', 'Observação'): total_obs += 1
+            else: total_normal += 1
+            b64 = _obter_b64_de_foto(ev)
+            thumb = f'<img class="foto-thumb" src="data:image/jpeg;base64,{b64}"/>' if b64 else "—"
+            mat_indicado = ev.get('material_necessario', '').strip() or "—"
+            rows_ev += f"""<tr>
+                <td style="width:90px;">{thumb}</td>
+                <td>{sanitizar(ev.get('titulo','—'))}</td>
+                <td style="text-align:center;"><span class="{cls_b}">{sanitizar(sev)}</span></td>
+                <td style="font-size:8pt;">{sanitizar(ev.get('comentarios','—'))}</td>
+                <td style="font-size:8pt;color:{COR_AZUL};font-weight:600;">{sanitizar(mat_indicado)}</td>
+            </tr>"""
+
+        mat_html += f"""
+        <div class="section-header">📍 {sanitizar(site_id)} — EVIDÊNCIAS E MATERIAIS</div>
+        <table class="mat-table">
+            <tr>
+                <th style="width:90px;">Foto</th><th>Título</th><th>Severidade</th><th>Descrição Técnica</th><th>Material Necessário</th>
+            </tr>
+            {rows_ev}
+        </table>"""
+
+    resumo_sev_html = f"""
+    <div class="kpi-grid" style="margin-top:16px;">
+        <div class="kpi-box" style="border-color:#DA291C;"><div class="kpi-val" style="color:#DA291C;">{total_criticos}</div><div class="kpi-lbl">Críticos</div></div>
+        <div class="kpi-box" style="border-color:#D97706;"><div class="kpi-val" style="color:#D97706;">{total_obs}</div><div class="kpi-lbl">Observações</div></div>
+        <div class="kpi-box" style="border-color:#16A34A;"><div class="kpi-val" style="color:#16A34A;">{total_normal}</div><div class="kpi-lbl">Normais</div></div>
+    </div>"""
+
+    html = f"""<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8"><style>{_css_rota_pdf()}</style></head>
+<body>
+<div class="page-header">
+  <div><div class="header-acento"></div><div class="header-titulo">⚡ Roteiro de Manutenção</div></div>
+  <div class="header-data">Emissão: <strong>{datetime.now().strftime('%d/%m/%Y %H:%M')}</strong><br>Técnico: <strong>{sanitizar(tecnico or 'N/I')}</strong></div>
+</div>
+<div class="section-header">1 &nbsp; KPIs DA OPERAÇÃO</div>
+{kpi_html}
+{resumo_sev_html}
+<div class="section-header">2 &nbsp; SEQUENCIAMENTO OTIMIZADO</div>
+<table class="seq-table">
+    <tr><th style="width:60px;">Seq.</th><th>Site / Identificação</th><th>Coordenadas</th></tr>
+    {seq_rows}
+</table>
+<div style="page-break-before:always;"></div>
+<div class="section-header">3 &nbsp; PAINEL DE EVIDÊNCIAS E MATERIAIS POR SITE</div>
+{mat_html if mat_html else '<p style="color:#64748B;padding:10px;">Nenhuma evidência fotográfica encontrada para os sites selecionados.</p>'}
+</body></html>"""
+
+    nome = f"Roteiro_{datetime.now().strftime('%Y%m%d%H%M%S')}.pdf"
+    pdf_bytes = HTML(string=html).write_pdf()
+    return pdf_bytes, nome
+
+
+def gerar_excel_rota(rota_otimizada, distancia_km, duracao_seg, tecnico, evidencias_por_site) -> tuple[bytes, str]:
+    """Gera planilha Excel com KPIs, sequenciamento e materiais por site."""
+    wb = openpyxl.Workbook()
+
+    # ── Estilos ──
+    azul_fill = PatternFill("solid", fgColor="002060")
+    azul_med_fill = PatternFill("solid", fgColor="003087")
+    cinza_fill = PatternFill("solid", fgColor="EBF0FA")
+    vermelho_fill = PatternFill("solid", fgColor="DA291C")
+    amarelo_fill = PatternFill("solid", fgColor="D97706")
+    verde_fill = PatternFill("solid", fgColor="16A34A")
+    branco_font = Font(color="FFFFFF", bold=True)
+    azul_font = Font(color="002060", bold=True)
+    borda = Border(
+        left=Side(style='thin', color="CBD5E1"),
+        right=Side(style='thin', color="CBD5E1"),
+        top=Side(style='thin', color="CBD5E1"),
+        bottom=Side(style='thin', color="CBD5E1")
+    )
+
+    def _cab(ws, col, row, texto, fill=None, bold=True, center=False):
+        cell = ws.cell(row=row, column=col, value=texto)
+        if fill: cell.fill = fill
+        cell.font = Font(color="FFFFFF" if fill else "002060", bold=bold, size=10 if fill else 9)
+        cell.alignment = Alignment(horizontal="center" if center else "left", vertical="center", wrap_text=True)
+        cell.border = borda
+        return cell
+
+    def _val(ws, col, row, texto, fill=None):
+        cell = ws.cell(row=row, column=col, value=texto)
+        cell.fill = fill if fill else PatternFill()
+        cell.font = Font(size=9)
+        cell.alignment = Alignment(vertical="center", wrap_text=True)
+        cell.border = borda
+        return cell
+
+    # ── Aba 1: KPIs ──
+    ws1 = wb.active
+    ws1.title = "KPIs da Operação"
+    ws1.column_dimensions['A'].width = 32
+    ws1.column_dimensions['B'].width = 20
+
+    ws1.merge_cells("A1:B1")
+    c = ws1["A1"]
+    c.value = "⚡ GIRCP — ROTEIRO DE MANUTENÇÃO"
+    c.fill = azul_fill
+    c.font = Font(color="FFFFFF", bold=True, size=14)
+    c.alignment = Alignment(horizontal="center", vertical="center")
+    ws1.row_dimensions[1].height = 32
+
+    kpis = [
+        ("Técnico em Campo", tecnico or "N/I"),
+        ("Data/Hora de Emissão", datetime.now().strftime('%d/%m/%Y %H:%M')),
+        ("Sites Atendidos", len(rota_otimizada) - 1),
+        ("Quilometragem Estimada (km)", f"{distancia_km:.1f}"),
+        ("Windshield Time", formatar_tempo(duracao_seg)),
+        ("Densidade (Sites/km)", f"{(len(rota_otimizada)-1)/distancia_km:.2f}" if distancia_km > 0 else "—"),
+    ]
+    for i, (k, v) in enumerate(kpis, start=2):
+        ws1.row_dimensions[i].height = 20
+        _cab(ws1, 1, i, k)
+        _val(ws1, 2, i, v)
+
+    # ── Aba 2: Sequenciamento ──
+    ws2 = wb.create_sheet("Sequenciamento")
+    for w, col in zip([8, 22, 18, 18], range(1, 5)):
+        ws2.column_dimensions[get_column_letter(col)].width = w
+    ws2.row_dimensions[1].height = 22
+    for col, hdr in enumerate(["Seq.", "Site / Identificação", "Latitude", "Longitude"], 1):
+        _cab(ws2, col, 1, hdr, fill=azul_fill)
+
+    for i, p in enumerate(rota_otimizada):
+        r = i + 2
+        ws2.row_dimensions[r].height = 18
+        fill_r = PatternFill("solid", fgColor="EBF0FA") if i % 2 == 0 else PatternFill()
+        label = "BASE" if i == 0 else f"{i:02d}"
+        _val(ws2, 1, r, label, fill_r)
+        _val(ws2, 2, r, p['id'], fill_r)
+        _val(ws2, 3, r, p.get('lat', ''), fill_r)
+        _val(ws2, 4, r, p.get('lon', ''), fill_r)
+
+    # ── Aba 3: Evidências e Materiais ──
+    ws3 = wb.create_sheet("Evidências e Materiais")
+    for w, col in zip([22, 26, 16, 36, 30], range(1, 6)):
+        ws3.column_dimensions[get_column_letter(col)].width = w
+    ws3.row_dimensions[1].height = 22
+    for col, hdr in enumerate(["Site", "Título da Evidência", "Severidade", "Descrição Técnica", "Material Necessário"], 1):
+        _cab(ws3, col, 1, hdr, fill=azul_fill)
+
+    row_ev = 2
+    sev_fills = {'Critico': vermelho_fill, 'Crítico': vermelho_fill, 'Observacao': amarelo_fill, 'Observação': amarelo_fill}
+    for site_id, evidencias in evidencias_por_site.items():
+        for ev in evidencias:
+            sev = ev.get('severidade', 'Normal')
+            sfill = sev_fills.get(sev, verde_fill)
+            ws3.row_dimensions[row_ev].height = 18
+            row_fill = PatternFill("solid", fgColor="EBF0FA") if row_ev % 2 == 0 else PatternFill()
+            _val(ws3, 1, row_ev, site_id, row_fill)
+            _val(ws3, 2, row_ev, ev.get('titulo', '—'), row_fill)
+            c_sev = ws3.cell(row=row_ev, column=3, value=sev)
+            c_sev.fill = sfill
+            c_sev.font = Font(color="FFFFFF", bold=True, size=9)
+            c_sev.alignment = Alignment(horizontal="center", vertical="center")
+            c_sev.border = borda
+            _val(ws3, 4, row_ev, ev.get('comentarios', '—'), row_fill)
+            _val(ws3, 5, row_ev, ev.get('material_necessario', '').strip() or '—', row_fill)
+            row_ev += 1
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    nome = f"Roteiro_{datetime.now().strftime('%Y%m%d%H%M%S')}.xlsx"
+    return buf.getvalue(), nome
+
 
 # ==============================================================================
 # ENTRY POINT
