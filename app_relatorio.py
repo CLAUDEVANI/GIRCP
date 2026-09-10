@@ -183,6 +183,8 @@ def gerar_pdf(dados: dict, fotos: list, extras: list = None) -> tuple[bytes, str
         sev  = f.get('severidade', 'Normal')
         cls_b = {'Crítico': 'badge-critico', 'Critico': 'badge-critico', 'Observação': 'badge-obs',  'Observacao': 'badge-obs'}.get(sev, 'badge-normal')
         cat  = sanitizar(f.get('categoria', 'Geral'))
+        sev_norm = sev.replace('ã','a').replace('Ã','A')
+        badge_html = f'<span class="badge {cls_b}">{sanitizar(sev)}</span>' if sev_norm not in ('Normal', '') else ''
         fotos_html += f"""
         <table class="card-evidencia">
           <tr>
@@ -190,7 +192,7 @@ def gerar_pdf(dados: dict, fotos: list, extras: list = None) -> tuple[bytes, str
             <td class="col-foto"><img src="data:{mime};base64,{b64}"/></td>
             <td class="col-texto">
               <div class="foto-titulo">{tit}</div>
-              <span class="badge {cls_b}">{sanitizar(sev)}</span>
+              {badge_html}
               <span style="font-size:7.5pt;color:{COR_CINZA};margin-left:6px;">{cat}</span>
               <div class="label-desc" style="margin-top:6px;">Descrição Técnica:</div>
               <div class="foto-desc">{desc}</div>
