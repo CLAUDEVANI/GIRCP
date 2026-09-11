@@ -1,6 +1,6 @@
 """
 GIRCP — Gerador Inteligente de Relatórios e Controle Fotográfico
-| v3.4.3 (Roteirização com Numeração WebGL Segura)
+| v3.7.1 (Sprints 1, 2 e 3 + Correção SQLite Row)
 """
 
 import streamlit as st
@@ -10,6 +10,7 @@ import json
 import os
 import io
 import hashlib
+import hmac
 import math
 import requests
 import html as html_mod
@@ -17,7 +18,9 @@ import pandas as pd
 import plotly.express as px
 import pydeck as pdk
 import xml.etree.ElementTree as ET
-from datetime import datetime
+import filetype
+import qrcode
+from datetime import datetime, timedelta
 from PIL import Image
 from weasyprint import HTML
 import openpyxl
@@ -28,13 +31,29 @@ from openpyxl.utils import get_column_letter
 # 0. CONTROLE DE ACESSO E SEGURANÇA (LGPD)
 # ==============================================================================
 def check_password():
+    if "tentativas" not in st.session_state:
+        st.session_state["tentativas"] = 0
+        
+    if "bloqueado_ate" in st.session_state:
+        if datetime.now() < st.session_state["bloqueado_ate"]:
+            restante = (st.session_state["bloqueado_ate"] - datetime.now()).seconds
+            st.error(f"🔒 Acesso bloqueado. Tente novamente em {restante} segundos.")
+            return False
+        else:
+            del st.session_state["bloqueado_ate"]
+            st.session_state["tentativas"] = 0
+
     def password_entered():
         senha_correta = st.secrets.get("senha_acesso", "GIRCP2026")
-        if st.session_state["password_input"] == senha_correta:
+        if hmac.compare_digest(st.session_state["password_input"].encode(), senha_correta.encode()):
             st.session_state["password_correct"] = True
             del st.session_state["password_input"]
+            st.session_state["tentativas"] = 0
         else:
             st.session_state["password_correct"] = False
+            st.session_state["tentativas"] += 1
+            if st.session_state["tentativas"] >= 5:
+                st.session_state["bloqueado_ate"] = datetime.now() + timedelta(minutes=5)
 
     if st.session_state.get("password_correct", False):
         return True
@@ -43,7 +62,7 @@ def check_password():
     st.text_input("Digite a senha de acesso", type="password", on_change=password_entered, key="password_input")
     
     if "password_correct" in st.session_state and not st.session_state["password_correct"]:
-        st.error("😕 Senha incorreta.")
+        st.error(f"😕 Senha incorreta. Tentativas: {st.session_state['tentativas']}/5")
     return False
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -89,14 +108,38 @@ def init_db():
                 criado_em   TEXT DEFAULT (datetime('now','localtime'))
             )
         ''')
-        for col in ("criado_em TEXT", "endereco TEXT", "tecnico TEXT", "numero_relatorio TEXT", "revisao TEXT", "latitude REAL", "longitude REAL"):
+        
+        colunas_novas = [
+            "criado_em TEXT", "endereco TEXT", "tecnico TEXT", "numero_relatorio TEXT",
+            "revisao TEXT", "latitude REAL", "longitude REAL", "art_rrt TEXT",
+            "conclusao TEXT", "status_laudo TEXT", "hash_integridade TEXT"
+        ]
+        for col in colunas_novas:
             try:
                 c.execute(f"ALTER TABLE relatorios ADD COLUMN {col}")
             except sqlite3.OperationalError:
                 pass
+
         c.execute("CREATE TABLE IF NOT EXISTS seq_relatorio (ultimo INTEGER DEFAULT 0)")
         c.execute("INSERT INTO seq_relatorio SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM seq_relatorio)")
+        
+        c.execute('''CREATE TABLE IF NOT EXISTS audit_log (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            criado_em   TEXT DEFAULT (datetime('now','localtime')),
+            tecnico     TEXT,
+            acao        TEXT,
+            id_relatorio INTEGER,
+            detalhe     TEXT
+        )''')
         conn.commit()
+
+def registrar_auditoria(acao: str, id_relatorio: int = None, detalhe: str = ""):
+    tecnico = st.session_state.get("_tecnico_global", "sistema")
+    with sqlite3.connect(DB_NAME) as conn:
+        conn.execute(
+            "INSERT INTO audit_log (tecnico, acao, id_relatorio, detalhe) VALUES (?,?,?,?)",
+            (tecnico, acao, id_relatorio, detalhe)
+        )
 
 def sanitizar(texto: str) -> str:
     return html_mod.escape(str(texto or '').strip())
@@ -119,11 +162,24 @@ def _carregar_b64(caminho: str) -> str:
             return base64.b64encode(f.read()).decode('utf-8')
     return ""
 
+def _gerar_qrcode_b64(texto: str) -> str:
+    qr = qrcode.make(texto)
+    buf = io.BytesIO()
+    qr.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode()
+
+def _botao_backup_db():
+    buf = io.BytesIO()
+    with open(DB_NAME, "rb") as f:
+        buf.write(f.read())
+    nome = f"GIRCP_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
+    st.sidebar.download_button("💾 Backup do Banco", buf.getvalue(), nome, "application/octet-stream")
+
 def _css_pdf() -> str:
     return f"""
     @page {{ size: A4; margin: 14mm 14mm 18mm 14mm; 
         @bottom-left {{ content: "CONFIDENCIAL • USO INTERNO • Dados protegidos pela LGPD | Sistema Corporativo GIRCP"; font-size: 7pt; color: {COR_CINZA}; font-family: 'Segoe UI', Arial, sans-serif; }}
-        @bottom-right {{ content: "Página " counter(page) " de " counter(pages); font-size: 7pt; color: {COR_CINZA}; font-family: 'Segoe UI', Arial, sans-serif; }}
+        @bottom-right {{ content: "Página " counter(page) " de " counter(pages) " | HASH_PLACEHOLDER"; font-size: 7pt; color: {COR_CINZA}; font-family: 'Segoe UI', Arial, sans-serif; }}
     }}
     * {{ box-sizing: border-box; margin: 0; padding: 0; }}
     body {{ font-family: 'Segoe UI', Helvetica, Arial, sans-serif; color: {COR_TEXTO}; font-size: 9.5pt; line-height: 1.5; background: #fff; }}
@@ -159,6 +215,10 @@ def _css_pdf() -> str:
     .badge-critico  {{ background:#DA291C; color:#fff; }}
     .badge-obs      {{ background:#D97706; color:#fff; }}
     .badge-normal   {{ background:#16A34A; color:#fff; }}
+    .badge-prazo-imediato {{ background: #7f1d1d; color: #fff; }}
+    .badge-prazo-urgente {{ background: #ea580c; color: #fff; }}
+    .badge-prazo-planejado {{ background: #0284c7; color: #fff; }}
+    .badge-prazo-monitorar {{ background: #475569; color: #fff; }}
     """
 
 def _obter_b64_de_foto(f: dict) -> str:
@@ -177,6 +237,30 @@ def gerar_pdf(dados: dict, fotos: list, extras: list = None) -> tuple[bytes, str
     sig_img = f'<img class="assinatura-img" src="data:image/png;base64,{b64_sig}"/>' if b64_sig else '<div style="height:40px;"></div>'
     logo_img = f'<img class="logo-img" src="data:image/png;base64,{b64_logo}"/>' if b64_logo else ""
 
+    n_criticos = sum(1 for f in fotos if f.get('severidade','') in ('Critico','Crítico'))
+    n_obs      = sum(1 for f in fotos if f.get('severidade','') in ('Observacao','Observação'))
+    n_normal   = len(fotos) - n_criticos - n_obs
+    all_mats   = [m for f in fotos for m in (f.get('materiais') or []) if m.get('descricao','').strip()]
+    total_custo = sum(m.get('quantidade',0)*m.get('custo_unit',0) for m in all_mats)
+
+    resumo_html = f"""
+    <div class="section-header">2 &nbsp; RESUMO EXECUTIVO</div>
+    <table class="dados-table">
+      <tr>
+        <td class="label">TOTAL DE EVIDÊNCIAS</td><td class="value">{len(fotos)}</td>
+        <td class="label">ITENS CRÍTICOS</td><td class="value" style="color:#DA291C;font-weight:bold;">{n_criticos}</td>
+      </tr>
+      <tr>
+        <td class="label">OBSERVAÇÕES</td><td class="value">{n_obs}</td>
+        <td class="label">NORMAIS</td><td class="value">{n_normal}</td>
+      </tr>
+      <tr>
+        <td class="label">TOTAL DE MATERIAIS</td><td class="value">{len(all_mats)} itens</td>
+        <td class="label">CUSTO ESTIMADO</td><td class="value" style="font-weight:bold;">R$ {total_custo:.2f}</td>
+      </tr>
+    </table>
+    """
+
     fotos_html = ""
     for i, f in enumerate(fotos, 1):
         b64 = _obter_b64_de_foto(f)
@@ -184,13 +268,20 @@ def gerar_pdf(dados: dict, fotos: list, extras: list = None) -> tuple[bytes, str
         tit  = sanitizar(f.get('titulo', f'Evidência {i}')).upper()
         desc = sanitizar(f.get('comentarios', 'N/A'))
         sev  = f.get('severidade', 'Normal')
-        cls_b = {'Crítico': 'badge-critico', 'Critico': 'badge-critico', 'Observação': 'badge-obs',  'Observacao': 'badge-obs'}.get(sev, 'badge-normal')
+        prazo = f.get('prazo_correcao', 'Monitorar')
+        
+        cls_b = {'Crítico': 'badge-critico', 'Critico': 'badge-critico', 'Observação': 'badge-obs', 'Observacao': 'badge-obs'}.get(sev, 'badge-normal')
+        cls_p = {'Imediato (0–24h)': 'badge-prazo-imediato', 'Urgente (até 7 dias)': 'badge-prazo-urgente', 'Planejado (até 30 dias)': 'badge-prazo-planejado'}.get(prazo, 'badge-prazo-monitorar')
         cat  = sanitizar(f.get('categoria', 'Geral'))
+        
         sev_norm = sev.replace('ã','a').replace('Ã','A')
-        badge_html = f'<span class="badge {cls_b}">{sanitizar(sev)}</span>' if sev_norm not in ('Normal', '') else ''
+        badge_html = f'<span class="badge {cls_b}">{sanitizar(sev)}</span> <span class="badge {cls_p}">{sanitizar(prazo)}</span>' if sev_norm not in ('Normal', '') else f'<span class="badge {cls_p}">{sanitizar(prazo)}</span>'
+        
         mats_list = f.get('materiais') or []
         if not mats_list and f.get('material_necessario','').strip():
             mats_list = [{'descricao': f.get('material_necessario',''), 'unidade':'un', 'quantidade':1, 'custo_unit':0.0}]
+        
+        mat_html_bloco = ''
         if mats_list and any(m.get('descricao','').strip() for m in mats_list):
             subtotal_ev = sum(m.get('quantidade',0)*m.get('custo_unit',0) for m in mats_list)
             rows_mat = "".join(
@@ -215,8 +306,7 @@ def gerar_pdf(dados: dict, fotos: list, extras: list = None) -> tuple[bytes, str
                 '<th style="padding:3px 8px;border:1px solid #e2e8f0;">Total R$</th></tr>'
                 + rows_mat + subtotal_html + '</table>'
             )
-        else:
-            mat_html_bloco = ''
+
         fotos_html += f"""
         <table class="card-evidencia">
           <tr>
@@ -235,7 +325,7 @@ def gerar_pdf(dados: dict, fotos: list, extras: list = None) -> tuple[bytes, str
 
     extras_html = ""
     if extras:
-        extras_html = '<div style="page-break-before:always;"></div><div class="section-header">3 &nbsp; ANEXOS ADICIONAIS</div>'
+        extras_html = '<div style="page-break-before:always;"></div><div class="section-header">4 &nbsp; ANEXOS ADICIONAIS</div>'
         for i, f in enumerate(extras, 1):
             b64  = _obter_b64_de_foto(f)
             mime = sanitizar(f.get('type', 'image/jpeg'))
@@ -254,7 +344,23 @@ def gerar_pdf(dados: dict, fotos: list, extras: list = None) -> tuple[bytes, str
               </tr>
             </table>"""
 
-    html = f"""<!DOCTYPE html>
+    status = sanitizar(dados.get('status_laudo', 'N/I'))
+    cor_status = {"✅ Aprovado": "#16A34A", "⚠️ Aprovado com Ressalvas": "#D97706", "❌ Reprovado": "#DA291C", "🔄 Em Acompanhamento": "#002060"}.get(status, "#1E293B")
+    
+    conclusao_html = f"""
+    <div class="section-header">5 &nbsp; CONCLUSÃO E PARECER TÉCNICO</div>
+    <table class="dados-table">
+      <tr><td class="label">STATUS DO LAUDO</td><td class="value" colspan="3" style="font-weight:bold;color:{cor_status};">{status}</td></tr>
+    </table>
+    <div class="foto-desc" style="margin-bottom:28px;font-size:10pt;background:#F8FAFC;">
+      {sanitizar(dados.get('conclusao', 'Sem parecer emitido.'))}
+    </div>
+    """
+
+    qr_b64 = _gerar_qrcode_b64(f"{dados.get('numero_relatorio', 'GIRCP')} - {dados.get('site_id', '')}")
+    qr_html = f'<img src="data:image/png;base64,{qr_b64}" style="width:65px; margin-bottom:-15px;"/>'
+
+    html_raw = f"""<!DOCTYPE html>
 <html lang="pt-BR"><head><meta charset="utf-8"><style>{_css_pdf()}</style></head>
 <body>
 {wm_html}
@@ -265,21 +371,29 @@ def gerar_pdf(dados: dict, fotos: list, extras: list = None) -> tuple[bytes, str
 <div class="section-header">1 &nbsp; DADOS CADASTRAIS DA INFRAESTRUTURA</div>
 <table class="dados-table">
   <tr><td class="label">N.º DO RELATÓRIO</td><td class="value">{sanitizar(dados.get('numero_relatorio','-'))}</td><td class="label">REVISÃO</td><td class="value">{sanitizar(dados.get('revisao','Rev.00'))}</td></tr>
-  <tr><td class="label">SITE / IDENTIFICAÇÃO</td><td class="value">{sanitizar(dados.get('site_id',''))}</td><td class="label">TÍTULO</td><td class="value">{sanitizar(dados.get('titulo',''))}</td></tr>
+  <tr><td class="label">SITE / IDENTIFICAÇÃO</td><td class="value">{sanitizar(dados.get('site_id',''))}</td><td class="label">ART / RRT Nº</td><td class="value">{sanitizar(dados.get('art_rrt','-'))}</td></tr>
+  <tr><td class="label">TÍTULO</td><td class="value">{sanitizar(dados.get('titulo',''))}</td><td class="label">EMPRESA</td><td class="value">{sanitizar(dados.get('empresa',''))}</td></tr>
   <tr><td class="label">ENDEREÇO FÍSICO</td><td class="value" colspan="3">{sanitizar(dados.get('endereco',''))}</td></tr>
   <tr><td class="label">TÉCNICO EM CAMPO</td><td class="value" colspan="3">{sanitizar(dados.get('tecnico', dados.get('contato','')))}</td></tr>
-  <tr><td class="label">EMPRESA</td><td class="value">{sanitizar(dados.get('empresa',''))}</td><td class="label">CONTATO TÉCNICO</td><td class="value">{sanitizar(dados.get('contato',''))}</td></tr>
-  <tr><td class="label">TELEFONE</td><td class="value">{sanitizar(dados.get('telefone',''))}</td><td class="label">E-MAIL</td><td class="value">{sanitizar(dados.get('email',''))}</td></tr>
+  <tr><td class="label">CONTATO TÉCNICO</td><td class="value">{sanitizar(dados.get('contato',''))}</td><td class="label">TELEFONE</td><td class="value">{sanitizar(dados.get('telefone',''))}</td></tr>
 </table>
-<div class="section-header">2 &nbsp; REGISTRO FOTOGRÁFICO E EVIDÊNCIAS</div>
+{resumo_html}
+<div class="section-header">3 &nbsp; REGISTRO FOTOGRÁFICO E EVIDÊNCIAS</div>
 {fotos_html}
 {extras_html}
-<div class="assinatura-wrapper">{sig_img}<div class="assinatura-linha"></div><div class="assinatura-nome">{sanitizar(dados.get('contato','Responsável Técnico'))}</div><div class="assinatura-cargo">Responsável Técnico</div><div class="logo-wrapper">{logo_img}</div></div>
+{conclusao_html}
+<div class="assinatura-wrapper">{qr_html}<br>{sig_img}<div class="assinatura-linha"></div><div class="assinatura-nome">{sanitizar(dados.get('contato','Responsável Técnico'))}</div><div class="assinatura-cargo">Responsável Técnico</div><div class="logo-wrapper">{logo_img}</div></div>
 </body></html>"""
 
     nome = f"Relatorio_{sanitizar(dados.get('site_id','SITE')).replace(' ','_')}_{datetime.now().strftime('%Y%m%d%H%M%S')}.pdf"
-    pdf_bytes = HTML(string=html).write_pdf()
-    return pdf_bytes, nome
+    
+    pdf_bytes_temp = HTML(string=html_raw.replace("HASH_PLACEHOLDER", "Gerando...")).write_pdf()
+    hash_doc = hashlib.sha256(pdf_bytes_temp).hexdigest()
+    
+    html_final = html_raw.replace("HASH_PLACEHOLDER", f"SHA-256: {hash_doc[:16]}")
+    pdf_bytes_final = HTML(string=html_final).write_pdf()
+    
+    return pdf_bytes_final, nome
 
 def aplicar_estilo():
     st.markdown(f"""<style>
@@ -306,6 +420,7 @@ def banner(subtitulo: str = ""):
       </div>
       <div class="eng-banner-badge">SISTEMA CORPORATIVO</div>
     </div>""", unsafe_allow_html=True)
+    _botao_backup_db()
 
 def secao(icone: str, titulo: str):
     st.markdown(f'<div class="eng-section">{sanitizar(icone)} &nbsp; {sanitizar(titulo)}</div>', unsafe_allow_html=True)
@@ -328,7 +443,6 @@ def _parse_kml_to_dataframe(arquivo_kml):
         
         lat, lon = 0.0, 0.0
         
-        # 1. Padrão KML Genérico (coordinates)
         coords_node = placemark.find('.//coordinates')
         if coords_node is not None and coords_node.text:
             coords_str = coords_node.text.strip().split()
@@ -339,7 +453,6 @@ def _parse_kml_to_dataframe(arquivo_kml):
                 except (ValueError, IndexError):
                     pass
 
-        # 2. Extração Avançada KML Claro/Telecom
         ext_data = placemark.find('.//ExtendedData')
         endereco, grupo = "", ""
         if ext_data is not None:
@@ -399,23 +512,20 @@ def _obter_filtros_cascata(df_sites):
     return escolha, endereco_val, lat_val, lon_val
 
 def _salvar_novo_relatorio(dados_cad, fotos, extras):
-    if not dados_cad['site_id'].strip():
-        st.error("⚠️ A IDENTIFICAÇÃO DO SITE É OBRIGATÓRIA.")
-        return
     with sqlite3.connect(DB_NAME) as conn:
         num_rel = proximo_numero_relatorio(conn)
         conn.execute(
             '''INSERT INTO relatorios
                (titulo, contato, empresa, telefone, email, site_id, endereco,
-                data_hora, fotos_json, extras_json, tecnico, numero_relatorio, revisao, latitude, longitude)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                data_hora, fotos_json, extras_json, tecnico, numero_relatorio, revisao, latitude, longitude, art_rrt, conclusao, status_laudo)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
             (sanitizar(dados_cad['titulo']), sanitizar(dados_cad['contato']),
              sanitizar(dados_cad['empresa']), sanitizar(dados_cad['telefone']),
              sanitizar(dados_cad['email']), sanitizar(dados_cad['site_id']),
              sanitizar(dados_cad['endereco']), sanitizar(dados_cad['data_hora']),
              json.dumps(fotos), json.dumps(extras),
-             sanitizar(dados_cad.get('tecnico', dados_cad['contato'])),
-             num_rel, 'Rev.00', dados_cad['latitude'], dados_cad['longitude']))
+             sanitizar(dados_cad['tecnico']), num_rel, 'Rev.00', dados_cad['latitude'], dados_cad['longitude'],
+             sanitizar(dados_cad['art_rrt']), sanitizar(dados_cad['conclusao']), sanitizar(dados_cad['status_laudo'])))
     st.success(f"✅ RELATÓRIO **{sanitizar(dados_cad['site_id'])}** SALVO! ACESSE A ABA PARA GERAR PDF.")
     st.balloons()
 
@@ -437,7 +547,7 @@ def tela_novo():
         st.session_state["site_anterior"] = site_selecionado
 
     secao("📸", "2. EVIDÊNCIAS FOTOGRÁFICAS PRINCIPAIS")
-    arq_fotos = st.file_uploader("FOTOS QUE DOCUMENTAM INTERVENÇÕES", type=["jpg", "jpeg", "png"], accept_multiple_files=True, key="up_evidencias_principal")
+    arq_fotos = st.file_uploader("FOTOS QUE DOCUMENTAM INTERVENÇÕES", type=["jpg", "jpeg", "png", "webp", "gif"], accept_multiple_files=True, key="up_evidencias_principal")
     
     if arq_fotos:
         atuais = [f.name for f in arq_fotos]
@@ -461,118 +571,153 @@ def tela_novo():
                 o[idx], o[idx+1] = o[idx+1], o[idx]; st.rerun()
         st.divider()
 
-    with st.form("form_relatorio_novo"):
-        secao("📋", "1. IDENTIFICAÇÃO DA INFRAESTRUTURA")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            titulo  = st.text_input(LBL_TITULO, value="", placeholder="Relatório Técnico", key="novo_titulo")
-            contato = st.text_input("CONTATO / TÉCNICO", value=st.session_state.get("_tecnico_global", ""), key="novo_contato")
-        with c2:
-            empresa  = st.text_input("EMPRESA", value="", placeholder="Empresa Parceira", key="novo_empresa")
-            telefone = st.text_input("TELEFONE", value="", placeholder="(11) 99999-9999", key="novo_telefone")
-        with c3:
-            email   = st.text_input("E-MAIL", value="", placeholder="tecnico@empresa.com.br", key="novo_email")
-            site_id = st.text_input("IDENTIFICAÇÃO DO SITE", value=site_selecionado)
+    secao("📋", "1. IDENTIFICAÇÃO DA INFRAESTRUTURA")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        titulo  = st.text_input(LBL_TITULO, value="", placeholder="Relatório Técnico", key="novo_titulo")
+        contato = st.text_input("CONTATO / TÉCNICO", value=st.session_state.get("_tecnico_global", ""), key="novo_contato")
+    with c2:
+        empresa  = st.text_input("EMPRESA", value="", placeholder="Empresa Parceira", key="novo_empresa")
+        telefone = st.text_input("TELEFONE", value="", placeholder="(11) 99999-9999", key="novo_telefone")
+    with c3:
+        email   = st.text_input("E-MAIL", value="", placeholder="tecnico@empresa.com.br", key="novo_email")
+        site_id = st.text_input("IDENTIFICAÇÃO DO SITE", value=site_selecionado)
 
-        tecnico  = st.text_input("TÉCNICO EM CAMPO", value=st.session_state.get("_tecnico_global", ""), key="novo_tecnico")
-        endereco = st.text_input("ENDEREÇO FÍSICO", value=endereco_autofill)
+    tecnico  = st.text_input("TÉCNICO EM CAMPO", value=st.session_state.get("_tecnico_global", ""), key="novo_tecnico")
+    art_rrt = st.text_input("ART / RRT Nº", value="", placeholder="Ex: 2026/000123 — CREA-SP", key="novo_art_rrt")
+    endereco = st.text_input("ENDEREÇO FÍSICO", value=endereco_autofill)
 
-        c_lat_novo, c_lon_novo = st.columns(2)
-        with c_lat_novo:
-            latitude_manual = st.number_input("LATITUDE", format="%.6f", step=0.000001, key="novo_lat")
-        with c_lon_novo:
-            longitude_manual = st.number_input("LONGITUDE", format="%.6f", step=0.000001, key="novo_lon")
+    c_lat_novo, c_lon_novo = st.columns(2)
+    with c_lat_novo:
+        latitude_manual = st.number_input("LATITUDE", format="%.6f", step=0.000001, key="novo_lat")
+    with c_lon_novo:
+        longitude_manual = st.number_input("LONGITUDE", format="%.6f", step=0.000001, key="novo_lon")
 
-        col_d, col_h = st.columns(2)
-        with col_d: data_vis = st.date_input("DATA DA VISITA", value=datetime.today(), key="novo_data")
-        with col_h: hora_vis = st.time_input("HORA", value=datetime.now().time(), key="novo_hora")
-        data_hora = f"{data_vis.strftime('%d/%m/%Y')} às {hora_vis.strftime('%H:%M')}"
+    col_d, col_h = st.columns(2)
+    with col_d: data_vis = st.date_input("DATA DA VISITA", value=datetime.today(), key="novo_data")
+    with col_h: hora_vis = st.time_input("HORA", value=datetime.now().time(), key="novo_hora")
+    data_hora = f"{data_vis.strftime('%d/%m/%Y')} às {hora_vis.strftime('%H:%M')}"
 
-        dados_cad = {
-            "titulo": titulo, "contato": contato, "empresa": empresa, "telefone": telefone,
-            "email": email, "site_id": site_id, "endereco": endereco, "data_hora": data_hora,
-            "tecnico": tecnico or contato, "latitude": latitude_manual, "longitude": longitude_manual
-        }
+    st.divider()
+    secao("📸", "2. METADADOS DAS EVIDÊNCIAS")
 
-        st.divider()
-        secao("📸", "2. METADADOS DAS EVIDÊNCIAS")
+    fotos_proc = []
+    if arq_fotos and st.session_state["ordem_evidencias"]:
+        dict_arquivos = {a.name: a for a in arq_fotos}
+        for idx, filename in enumerate(st.session_state["ordem_evidencias"]):
+            arquivo  = dict_arquivos[filename]
+            raw      = arquivo.getvalue()
+            
+            tipo_real = filetype.guess(raw)
+            if not tipo_real or tipo_real.extension not in ('jpg', 'jpeg', 'png', 'gif', 'webp'):
+                st.error(f"Arquivo '{arquivo.name}' não é imagem. Upload rejeitado.")
+                continue
 
-        fotos_proc = []
-        if arq_fotos and st.session_state["ordem_evidencias"]:
-            dict_arquivos = {a.name: a for a in arq_fotos}
-            for idx, filename in enumerate(st.session_state["ordem_evidencias"]):
-                arquivo  = dict_arquivos[filename]
-                raw      = arquivo.getvalue()
-                raw_comp = comprimir_para_pdf(raw)
-                foto_id  = hashlib.sha256(raw).hexdigest()[:16]
-                safe_key = f"ev_{idx}_{hashlib.md5(filename.encode()).hexdigest()[:8]}"
+            raw_comp = comprimir_para_pdf(raw)
+            foto_id  = hashlib.sha256(raw).hexdigest()[:16]
+            safe_key = f"ev_{idx}_{hashlib.md5(filename.encode()).hexdigest()[:8]}"
+            
+            caminho_foto = os.path.join(FOTOS_DIR, f"ev_{foto_id}.jpg")
+            with open(caminho_foto, "wb") as f_out: f_out.write(raw_comp)
+
+            st.markdown("---")
+            c_img, c_dados = st.columns([1, 3])
+            with c_img:
+                st.image(arquivo, use_container_width=True)
+                st.caption(f"ID: {sanitizar(foto_id)}")
+            with c_dados:
+                tit = st.text_input(LBL_TITULO, key=f"t_{safe_key}")
+                com = st.text_area(LBL_DESCRICAO, key=f"c_{safe_key}", height=75)
+                c_sev, c_cat, c_prazo = st.columns(3)
+                with c_sev: sev = st.selectbox("SEVERIDADE", ["Normal", "Observacao", "Critico"], key=f"sev_{safe_key}")
+                with c_cat: cat = st.selectbox("CATEGORIA",  ["Geral", "Antes", "Depois", "Detalhe"], key=f"cat_{safe_key}")
+                with c_prazo: prazo = st.selectbox("PRAZO", ["Imediato (0–24h)", "Urgente (até 7 dias)", "Planejado (até 30 dias)", "Monitorar"], key=f"prazo_{safe_key}")
                 
-                caminho_foto = os.path.join(FOTOS_DIR, f"ev_{foto_id}.jpg")
-                with open(caminho_foto, "wb") as f_out: f_out.write(raw_comp)
+                st.markdown("**🔧 Materiais necessários**")
+                mat_list_key = f"mats_{safe_key}"
+                if mat_list_key not in st.session_state:
+                    st.session_state[mat_list_key] = [{"descricao": "", "unidade": "un", "quantidade": 1, "custo_unit": 0.0}]
+                for mi, mitem in enumerate(st.session_state[mat_list_key]):
+                    mc1, mc2, mc3, mc4, mc5 = st.columns([3, 1.2, 1, 1.4, 0.5])
+                    mitem["descricao"]  = mc1.text_input("Descrição", value=mitem["descricao"],  key=f"md_{safe_key}_{mi}", label_visibility="collapsed", placeholder="Ex: Disjuntor 40A")
+                    mitem["unidade"]    = mc2.selectbox("Un.", ["un","m","kg","kit","cx","hr"], index=["un","m","kg","kit","cx","hr"].index(mitem["unidade"]), key=f"mu_{safe_key}_{mi}", label_visibility="collapsed")
+                    mitem["quantidade"] = mc3.number_input("Qtd", value=float(mitem["quantidade"]), min_value=0.0, step=1.0, key=f"mq_{safe_key}_{mi}", label_visibility="collapsed")
+                    mitem["custo_unit"] = mc4.number_input("R$ unit.", value=float(mitem["custo_unit"]), min_value=0.0, step=0.01, format="%.2f", key=f"mc_{safe_key}_{mi}", label_visibility="collapsed")
+                    if mc5.button("❌", key=f"mdel_{safe_key}_{mi}") and len(st.session_state[mat_list_key]) > 1:
+                        st.session_state[mat_list_key].pop(mi); st.rerun()
+                if st.button("＋ Adicionar material", key=f"madd_{safe_key}"):
+                    st.session_state[mat_list_key].append({"descricao": "", "unidade": "un", "quantidade": 1, "custo_unit": 0.0}); st.rerun()
+                subtotal = sum(m["quantidade"] * m["custo_unit"] for m in st.session_state[mat_list_key])
+                if subtotal > 0:
+                    st.markdown(f"<div style='text-align:right;font-size:12px;color:{COR_AZUL};'>Subtotal: <strong>R$ {subtotal:,.2f}</strong></div>", unsafe_allow_html=True)
 
-                st.markdown("---")
-                c_img, c_dados = st.columns([1, 3])
-                with c_img:
-                    st.image(arquivo, use_container_width=True)
-                    st.caption(f"ID: {sanitizar(foto_id)}")
-                with c_dados:
-                    tit = st.text_input(LBL_TITULO, key=f"t_{safe_key}")
-                    com = st.text_area(LBL_DESCRICAO, key=f"c_{safe_key}", height=75)
-                    c_sev, c_cat = st.columns(2)
-                    with c_sev: sev = st.selectbox("SEVERIDADE", ["Normal", "Observacao", "Critico"], key=f"sev_{safe_key}")
-                    with c_cat: cat = st.selectbox("CATEGORIA",  ["Geral", "Antes", "Depois", "Detalhe"], key=f"cat_{safe_key}")
-                    st.markdown("**🔧 Materiais necessários**")
-                    mat_list_key = f"mats_{safe_key}"
-                    if mat_list_key not in st.session_state:
-                        st.session_state[mat_list_key] = [{"descricao": "", "unidade": "un", "quantidade": 1, "custo_unit": 0.0}]
-                    for mi, mitem in enumerate(st.session_state[mat_list_key]):
-                        mc1, mc2, mc3, mc4, mc5 = st.columns([3, 1.2, 1, 1.4, 0.5])
-                        mitem["descricao"]  = mc1.text_input("Descrição", value=mitem["descricao"],  key=f"md_{safe_key}_{mi}", label_visibility="collapsed", placeholder="Ex: Disjuntor 40A")
-                        mitem["unidade"]    = mc2.selectbox("Un.", ["un","m","kg","kit","cx","hr"], index=["un","m","kg","kit","cx","hr"].index(mitem["unidade"]), key=f"mu_{safe_key}_{mi}", label_visibility="collapsed")
-                        mitem["quantidade"] = mc3.number_input("Qtd", value=float(mitem["quantidade"]), min_value=0.0, step=1.0, key=f"mq_{safe_key}_{mi}", label_visibility="collapsed")
-                        mitem["custo_unit"] = mc4.number_input("R$ unit.", value=float(mitem["custo_unit"]), min_value=0.0, step=0.01, format="%.2f", key=f"mc_{safe_key}_{mi}", label_visibility="collapsed")
-                        if mc5.button("❌", key=f"mdel_{safe_key}_{mi}") and len(st.session_state[mat_list_key]) > 1:
-                            st.session_state[mat_list_key].pop(mi); st.rerun()
-                    if st.button("＋ Adicionar material", key=f"madd_{safe_key}"):
-                        st.session_state[mat_list_key].append({"descricao": "", "unidade": "un", "quantidade": 1, "custo_unit": 0.0}); st.rerun()
-                    subtotal = sum(m["quantidade"] * m["custo_unit"] for m in st.session_state[mat_list_key])
-                    if subtotal > 0:
-                        st.markdown(f"<div style='text-align:right;font-size:12px;color:{COR_AZUL};'>Subtotal: <strong>R$ {subtotal:,.2f}</strong></div>", unsafe_allow_html=True)
+                fotos_proc.append({
+                    "foto_id": foto_id, "caminho": caminho_foto, "type": "image/jpeg",
+                    "titulo": tit.strip() or f"Evidência {idx+1}", "comentarios": com.strip() or "N/A",
+                    "filename": arquivo.name, "severidade": sev, "categoria": cat, "prazo_correcao": prazo,
+                    "materiais": st.session_state.get(mat_list_key, []),
+                    "material_necessario": ", ".join(m["descricao"] for m in st.session_state.get(mat_list_key, []) if m["descricao"].strip()),
+                })
 
-                    fotos_proc.append({
-                        "foto_id": foto_id, "caminho": caminho_foto, "type": "image/jpeg",
-                        "titulo": tit.strip() or f"Evidência {idx+1}", "comentarios": com.strip() or "N/A",
-                        "filename": arquivo.name, "severidade": sev, "categoria": cat,
-                        "materiais": st.session_state.get(mat_list_key, []),
-                        "material_necessario": ", ".join(m["descricao"] for m in st.session_state.get(mat_list_key, []) if m["descricao"].strip()),
-                    })
+    secao("📎", "3. ANEXOS ADICIONAIS")
+    arq_extras = st.file_uploader("SITUAÇÃO ANTERIOR OU CONTEXTO GERAL", type=["jpg", "jpeg", "png", "webp", "gif"], accept_multiple_files=True, key="up_extras_principal")
+    extras_proc = []
+    if arq_extras:
+        for idx_ex, arq_ex in enumerate(arq_extras):
+            raw_ex = arq_ex.getvalue()
+            tipo_real = filetype.guess(raw_ex)
+            if not tipo_real or tipo_real.extension not in ('jpg', 'jpeg', 'png', 'gif', 'webp'):
+                st.error(f"Arquivo '{arq_ex.name}' não é imagem. Upload rejeitado.")
+                continue
 
-        secao("📎", "3. ANEXOS ADICIONAIS")
-        arq_extras = st.file_uploader("SITUAÇÃO ANTERIOR OU CONTEXTO GERAL", type=["jpg", "jpeg", "png"], accept_multiple_files=True, key="up_extras_principal")
-        extras_proc = []
-        if arq_extras:
-            for idx_ex, arq_ex in enumerate(arq_extras):
-                raw_ex = arq_ex.getvalue()
-                raw_comp_ex = comprimir_para_pdf(raw_ex)
-                fid_ex = hashlib.sha256(raw_ex).hexdigest()[:16]
-                
-                caminho_extra = os.path.join(FOTOS_DIR, f"ex_{fid_ex}.jpg")
-                with open(caminho_extra, "wb") as f_out_ex: f_out_ex.write(raw_comp_ex)
-                
-                c_img_ex, c_dados_ex = st.columns([1, 3])
-                with c_img_ex: st.image(arq_ex, use_container_width=True)
-                with c_dados_ex:
-                    t_ex = st.text_input(LBL_TITULO, key=f"t_ex_{idx_ex}")
-                    c_ex = st.text_area(LBL_DESCRICAO, key=f"c_ex_{idx_ex}", height=75)
-                    extras_proc.append({
-                        "foto_id": fid_ex, "caminho": caminho_extra, "type": "image/jpeg",
-                        "titulo": t_ex.strip() or f"Anexo {idx_ex+1}", "comentarios": c_ex.strip() or "N/A",
-                        "filename": arq_ex.name
-                    })
+            raw_comp_ex = comprimir_para_pdf(raw_ex)
+            fid_ex = hashlib.sha256(raw_ex).hexdigest()[:16]
+            
+            caminho_extra = os.path.join(FOTOS_DIR, f"ex_{fid_ex}.jpg")
+            with open(caminho_extra, "wb") as f_out_ex: f_out_ex.write(raw_comp_ex)
+            
+            c_img_ex, c_dados_ex = st.columns([1, 3])
+            with c_img_ex: st.image(arq_ex, use_container_width=True)
+            with c_dados_ex:
+                t_ex = st.text_input(LBL_TITULO, key=f"t_ex_{idx_ex}")
+                c_ex = st.text_area(LBL_DESCRICAO, key=f"c_ex_{idx_ex}", height=75)
+                extras_proc.append({
+                    "foto_id": fid_ex, "caminho": caminho_extra, "type": "image/jpeg",
+                    "titulo": t_ex.strip() or f"Anexo {idx_ex+1}", "comentarios": c_ex.strip() or "N/A",
+                    "filename": arq_ex.name
+                })
+    
+    secao("📝", "4. CONCLUSÃO E PARECER TÉCNICO")
+    status_laudo = st.selectbox("STATUS GERAL DO LAUDO", ["✅ Aprovado", "⚠️ Aprovado com Ressalvas", "❌ Reprovado", "🔄 Em Acompanhamento"], key="novo_status_laudo")
+    conclusao = st.text_area("PARECER TÉCNICO / CONCLUSÃO", height=120, placeholder="Descreva o resultado geral da vistoria, recomendações...", key="novo_conclusao")
+
+    dados_cad = {
+        "titulo": titulo, "contato": contato, "empresa": empresa, "telefone": telefone,
+        "email": email, "site_id": site_id, "endereco": endereco, "data_hora": data_hora,
+        "tecnico": tecnico or contato, "latitude": latitude_manual, "longitude": longitude_manual,
+        "art_rrt": art_rrt, "conclusao": conclusao, "status_laudo": status_laudo
+    }
+
+    c_prev, c_sub = st.columns([1, 2])
+    with c_prev:
+        if st.button("👁️ PRÉ-VISUALIZAR PDF", use_container_width=True):
+            pdf_bytes_tmp, _ = gerar_pdf(dados_cad, fotos_proc, extras_proc)
+            st.download_button("⬇️ Baixar Preview", pdf_bytes_tmp, "Preview.pdf", "application/pdf")
+            
+    with c_sub:
+        submit = st.button("💾 SALVAR RELATÓRIO OFICIAL", type="primary", use_container_width=True)
+
+    if submit: 
+        erros = []
+        if not dados_cad["site_id"].strip(): erros.append("• A Identificação do Site é obrigatória.")
+        if not dados_cad["tecnico"].strip() and not dados_cad["contato"].strip(): erros.append("• Informe o Técnico em Campo.")
+        if not fotos_proc: erros.append("• Adicione ao menos uma evidência.")
         
-        submit = st.form_submit_button("💾 SALVAR RELATÓRIO NO BANCO DE DADOS", type="primary", use_container_width=True)
-
-    if submit: _salvar_novo_relatorio(dados_cad, fotos_proc, extras_proc)
+        if erros:
+            st.error("⚠️ Corrija para salvar:\n" + "\n".join(erros))
+        else:
+            _salvar_novo_relatorio(dados_cad, fotos_proc, extras_proc)
+            registrar_auditoria("criar", detalhe=dados_cad["site_id"])
 
 def _render_cadastrais(row, lid):
     secao("📋", "DADOS CADASTRAIS")
@@ -580,31 +725,53 @@ def _render_cadastrais(row, lid):
     with e1:
         tit = st.text_input(LBL_TITULO, value=row['titulo'], key=f"tit_{lid}")
         con = st.text_input("CONTATO", value=row['contato'], key=f"con_{lid}")
+        
+        val_art = row['art_rrt'] if 'art_rrt' in row.keys() and row['art_rrt'] else ""
+        art = st.text_input("ART / RRT Nº", value=val_art, key=f"art_{lid}")
     with e2:
         emp = st.text_input("EMPRESA", value=row['empresa'], key=f"emp_{lid}")
         tel = st.text_input("TELEFONE", value=row['telefone'], key=f"tel_{lid}")
+        
+        val_status = row['status_laudo'] if 'status_laudo' in row.keys() and row['status_laudo'] else "✅ Aprovado"
+        status = st.selectbox("STATUS DO LAUDO", ["✅ Aprovado", "⚠️ Aprovado com Ressalvas", "❌ Reprovado", "🔄 Em Acompanhamento"], index=["✅ Aprovado", "⚠️ Aprovado com Ressalvas", "❌ Reprovado", "🔄 Em Acompanhamento"].index(val_status), key=f"status_{lid}")
     with e3:
         eml = st.text_input("E-MAIL", value=row['email'], key=f"eml_{lid}")
         sit = st.text_input("SITE", value=row['site_id'], key=f"sit_{lid}")
         dat = st.text_input("DATA E HORA", value=row['data_hora'], key=f"dat_{lid}")
     
-    end = st.text_input("ENDEREÇO", value=row['endereco'] if 'endereco' in row.keys() else "", key=f"end_{lid}")
+    val_end = row['endereco'] if 'endereco' in row.keys() and row['endereco'] else ""
+    end = st.text_input("ENDEREÇO", value=val_end, key=f"end_{lid}")
+    
+    val_conc = row['conclusao'] if 'conclusao' in row.keys() and row['conclusao'] else ""
+    conclusao = st.text_area("CONCLUSÃO E PARECER", value=val_conc, key=f"conclusao_{lid}")
     
     c_lat, c_lon = st.columns(2)
     with c_lat:
-        lat_val = float(row['latitude']) if 'latitude' in row.keys() and row['latitude'] is not None else 0.0
+        lat_val = float(row['latitude']) if 'latitude' in row.keys() and row['latitude'] else 0.0
         lat = st.number_input("LATITUDE", value=lat_val, format="%.6f", step=0.000001, key=f"lat_{lid}")
     with c_lon:
-        lon_val = float(row['longitude']) if 'longitude' in row.keys() and row['longitude'] is not None else 0.0
+        lon_val = float(row['longitude']) if 'longitude' in row.keys() and row['longitude'] else 0.0
         lon = st.number_input("LONGITUDE", value=lon_val, format="%.6f", step=0.000001, key=f"lon_{lid}")
 
-    return {"tit": tit, "con": con, "emp": emp, "tel": tel, "eml": eml, "sit": sit, "dat": dat, "end": end, "lat": lat, "lon": lon}
+    return {"tit": tit, "con": con, "emp": emp, "tel": tel, "eml": eml, "sit": sit, "dat": dat, "end": end, "lat": lat, "lon": lon, "art_rrt": art, "status_laudo": status, "conclusao": conclusao}
 
 def _executar_acao_inline(lid, fid, acao, prefixo, db_field):
     if db_field not in ("fotos_json", "extras_json"):
         return
+    
+    _QUERIES_CAMPO = {
+        "fotos_json": {
+            "select": "SELECT fotos_json FROM relatorios WHERE id=?",
+            "update": "UPDATE relatorios SET fotos_json=? WHERE id=?"
+        },
+        "extras_json": {
+            "select": "SELECT extras_json FROM relatorios WHERE id=?",
+            "update": "UPDATE relatorios SET extras_json=? WHERE id=?"
+        }
+    }
+
     with sqlite3.connect(DB_NAME) as conn:
-        row = conn.execute(f"SELECT {db_field} FROM relatorios WHERE id=?", (lid,)).fetchone()
+        row = conn.execute(_QUERIES_CAMPO[db_field]["select"], (lid,)).fetchone()
         if not row or not row[0]: return
         fotos = json.loads(row[0])
         for i in range(len(fotos)):
@@ -612,9 +779,11 @@ def _executar_acao_inline(lid, fid, acao, prefixo, db_field):
             t_val = st.session_state.get(f"{prefixo}t_{lid}_{cfid}")
             c_val = st.session_state.get(f"{prefixo}c_{lid}_{cfid}")
             m_val = st.session_state.get(f"{prefixo}m_{lid}_{cfid}")
+            p_val = st.session_state.get(f"{prefixo}p_{lid}_{cfid}")
             if t_val is not None: fotos[i]["titulo"] = t_val
             if c_val is not None: fotos[i]["comentarios"] = c_val
             if m_val is not None: fotos[i]["material_necessario"] = m_val
+            if p_val is not None: fotos[i]["prazo_correcao"] = p_val
         
         k = next((i for i, f in enumerate(fotos) if f.get("foto_id", f.get("base64", "")[:16]) == fid), -1)
         if k != -1:
@@ -626,8 +795,9 @@ def _executar_acao_inline(lid, fid, acao, prefixo, db_field):
                     try: os.remove(caminho_del)
                     except: pass
                 fotos.pop(k)
-            conn.execute(f"UPDATE relatorios SET {db_field}=? WHERE id=?", (json.dumps(fotos), lid))
+            conn.execute(_QUERIES_CAMPO[db_field]["update"], (json.dumps(fotos), lid))
             conn.commit()
+            registrar_auditoria(f"editou_inline_{acao}", lid, fid)
 
 def _render_item_edicao(f, k, lid, prefixo, total_fotos, db_field):
     fid = f.get("foto_id", f.get("base64", "")[:16])
@@ -647,6 +817,8 @@ def _render_item_edicao(f, k, lid, prefixo, total_fotos, db_field):
     with col_d:
         nt = st.text_input(LBL_TITULO, value=f.get('titulo', ''), key=f"{prefixo}t_{lid}_{fid}")
         nc = st.text_area(LBL_DESCRICAO, value=f.get('comentarios', ''), key=f"{prefixo}c_{lid}_{fid}", height=65)
+        nprazo = st.selectbox("PRAZO", ["Imediato (0–24h)", "Urgente (até 7 dias)", "Planejado (até 30 dias)", "Monitorar"], index=["Imediato (0–24h)", "Urgente (até 7 dias)", "Planejado (até 30 dias)", "Monitorar"].index(f.get("prazo_correcao", "Monitorar")), key=f"{prefixo}p_{lid}_{fid}")
+        
         st.markdown("**🔧 Materiais necessários**")
         emat_key = f"emats_{prefixo}_{lid}_{fid}"
         mats_default = f.get('materiais') or ([{"descricao": f.get('material_necessario',''), "unidade":"un","quantidade":1,"custo_unit":0.0}] if f.get('material_necessario','').strip() else [{"descricao":"","unidade":"un","quantidade":1,"custo_unit":0.0}])
@@ -675,7 +847,7 @@ def _render_item_edicao(f, k, lid, prefixo, total_fotos, db_field):
         if st.button("❌", key=f"{prefixo}del_{lid}_{fid}"):
             _executar_acao_inline(lid, fid, "del", prefixo, db_field); st.rerun()
     emat_key2 = f"emats_{prefixo}_{lid}_{fid}"
-    fc = f.copy(); fc['titulo'] = nt; fc['comentarios'] = nc; fc['material_necessario'] = nm
+    fc = f.copy(); fc['titulo'] = nt; fc['comentarios'] = nc; fc['material_necessario'] = nm; fc['prazo_correcao'] = nprazo
     fc['materiais'] = st.session_state.get(emat_key2, f.get('materiais', []))
     return fc
 
@@ -691,12 +863,18 @@ def _render_edicao_lista(fotos, lid, titulo_sec, icone, prefixo):
 
 def _render_novas_fotos(lid, db_existentes):
     secao("➕", "ADICIONAR NOVAS FOTOS")
-    arq = st.file_uploader("ENVIAR NOVAS IMAGENS", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True, key=f"new_{lid}")
+    arq = st.file_uploader("ENVIAR NOVAS IMAGENS", type=['png', 'jpg', 'jpeg', 'webp', 'gif'], accept_multiple_files=True, key=f"new_{lid}")
     novas = []
     if arq:
         ids = {f.get("foto_id") for f in db_existentes}
         for idx_n, a in enumerate(arq):
-            raw = a.getvalue(); raw_comp = comprimir_para_pdf(raw)
+            raw = a.getvalue()
+            tipo_real = filetype.guess(raw)
+            if not tipo_real or tipo_real.extension not in ('jpg', 'jpeg', 'png', 'gif', 'webp'):
+                st.error(f"Arquivo '{a.name}' não é imagem. Upload rejeitado.")
+                continue
+
+            raw_comp = comprimir_para_pdf(raw)
             fid = hashlib.sha256(raw).hexdigest()[:16]
             caminho_foto = os.path.join(FOTOS_DIR, f"new_{lid}_{fid}.jpg")
             with open(caminho_foto, "wb") as f_out: f_out.write(raw_comp)
@@ -708,7 +886,7 @@ def _render_novas_fotos(lid, db_existentes):
                 nt = st.text_input(LBL_TITULO, key=f"n_t_{lid}_{idx_n}")
                 nc = st.text_area(LBL_DESCRICAO, key=f"n_c_{lid}_{idx_n}", height=55)
             novas.append({
-                "foto_id": fid, "caminho": caminho_foto, "type": a.type, 
+                "foto_id": fid, "caminho": caminho_foto, "type": "image/jpeg", 
                 "titulo": nt.strip() if nt else f"Nova Foto {idx_n+1}",
                 "comentarios": nc.strip() if nc else "N/A", "filename": a.name
             })
@@ -717,21 +895,34 @@ def _render_novas_fotos(lid, db_existentes):
 
 def _tratar_botoes_acao_pdf(lid, row, state):
     if st.button(f"📄 GERAR PDF — {sanitizar(row['site_id'])}", key=f"pdf_{lid}", type="primary"):
-        num_rel = (row['numero_relatorio'] if 'numero_relatorio' in row.keys() else None) or ""
+        num_rel = row['numero_relatorio'] if 'numero_relatorio' in row.keys() and row['numero_relatorio'] else ""
         if not num_rel.strip():
             with sqlite3.connect(DB_NAME) as conn:
                 num_rel = proximo_numero_relatorio(conn)
                 conn.execute("UPDATE relatorios SET numero_relatorio=?, revisao=? WHERE id=?", (num_rel, "Rev.00", lid))
+        
         dados_pdf = {
-            "titulo": row['titulo'], "contato": row['contato'], "empresa": row['empresa'], "telefone": row['telefone'],
-            "email": row['email'], "site_id": row['site_id'], "endereco": row['endereco'] if 'endereco' in row.keys() else "",
-            "data_hora": row['data_hora'], "tecnico": (row['tecnico'] if 'tecnico' in row.keys() else None) or row['contato'],
-            "numero_relatorio": num_rel, "revisao": (row['revisao'] if 'revisao' in row.keys() else None) or "Rev.00",
+            "titulo": row['titulo'], 
+            "contato": row['contato'], 
+            "empresa": row['empresa'], 
+            "telefone": row['telefone'],
+            "email": row['email'], 
+            "site_id": row['site_id'], 
+            "endereco": row['endereco'] if 'endereco' in row.keys() else '',
+            "data_hora": row['data_hora'], 
+            "tecnico": row['tecnico'] if 'tecnico' in row.keys() and row['tecnico'] else row['contato'],
+            "numero_relatorio": num_rel, 
+            "revisao": row['revisao'] if 'revisao' in row.keys() and row['revisao'] else 'Rev.00',
+            "art_rrt": row['art_rrt'] if 'art_rrt' in row.keys() and row['art_rrt'] else '', 
+            "conclusao": row['conclusao'] if 'conclusao' in row.keys() and row['conclusao'] else '', 
+            "status_laudo": row['status_laudo'] if 'status_laudo' in row.keys() and row['status_laudo'] else '✅ Aprovado'
         }
+        
         with st.spinner("GERANDO PDF EM MEMÓRIA..."):
             pdf_bytes, file_name = gerar_pdf(dados_pdf, state["fotos_db"], state["extras_db"])
         
         st.download_button("⬇️ BAIXAR PDF GERADO", data=pdf_bytes, file_name=file_name, mime="application/pdf", key=f"dl_{lid}")
+        registrar_auditoria("gerar_pdf", lid)
 
 def _tratar_botoes_acao(lid, state):
     col_b, col_c = st.columns(2)
@@ -747,6 +938,7 @@ def _tratar_limpeza(lid):
             with sqlite3.connect(DB_NAME) as conn:
                 conn.execute("UPDATE relatorios SET fotos_json='[]', extras_json='[]' WHERE id=?", (lid,))
                 conn.commit()
+            registrar_auditoria("limpar_fotos", lid)
             st.session_state.pop(f"conf_lim_{lid}", None); st.rerun()
         if cn.button("❌ CANCELAR", key=f"nao_{lid}"):
             st.session_state.pop(f"conf_lim_{lid}", None); st.rerun()
@@ -755,15 +947,23 @@ def _salvar_edicoes(lid, state):
     fotos_finais = state["fotos_edit"] + state["novas"]
     extras_finais = state["extras_edit"] 
     d = state["cad"]
+    
+    if not d["sit"].strip():
+        st.error("• A Identificação do Site é obrigatória.")
+        return
+        
     with sqlite3.connect(DB_NAME) as conn:
         conn.execute('''UPDATE relatorios
                         SET titulo=?,contato=?,empresa=?,telefone=?,email=?,
                             site_id=?,endereco=?,data_hora=?,
-                            fotos_json=?,extras_json=?, latitude=?, longitude=? WHERE id=?''',
+                            fotos_json=?,extras_json=?, latitude=?, longitude=?,
+                            art_rrt=?, conclusao=?, status_laudo=? WHERE id=?''',
                      (d["tit"], d["con"], d["emp"], d["tel"], d["eml"],
                       d["sit"], d["end"], d["dat"],
-                      json.dumps(fotos_finais), json.dumps(extras_finais), d["lat"], d["lon"], lid))
+                      json.dumps(fotos_finais), json.dumps(extras_finais), d["lat"], d["lon"],
+                      d["art_rrt"], d["conclusao"], d["status_laudo"], lid))
         conn.commit()
+    registrar_auditoria("editar", lid, d["sit"])
     st.success("✅ RELATÓRIO ATUALIZADO COM SUCESSO!"); st.rerun()
 
 def _processar_acoes_relatorio(state: dict):
@@ -793,8 +993,11 @@ def _render_relatorio_expander(row):
         st.rerun()
 
     if st.session_state[exp_key]:
-        fotos_db = json.loads(row['fotos_json'] or "[]")
-        extras_db = json.loads(row['extras_json'] or "[]") if 'extras_json' in row.keys() else []
+        fotos_db = json.loads(row['fotos_json'] if row['fotos_json'] else "[]")
+        
+        ext_str = row['extras_json'] if 'extras_json' in row.keys() and row['extras_json'] else "[]"
+        extras_db = json.loads(ext_str)
+        
         with st.container(border=True):
             state = _render_dados_cadastrais_form(row, lid, fotos_db, extras_db)
             _processar_acoes_relatorio(state)
@@ -820,8 +1023,8 @@ def tela_pesquisa():
     st.markdown("<br>", unsafe_allow_html=True)
     ta, tb, tc = st.columns(3)
     with ta: st.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{len(rows)}</div><div class="eng-metric-label">RESULTADOS</div></div>', unsafe_allow_html=True)
-    with tb: st.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{sum(len(json.loads(r["fotos_json"] or "[]")) for r in rows)}</div><div class="eng-metric-label">EVIDÊNCIAS</div></div>', unsafe_allow_html=True)
-    with tc: st.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{sum(len(json.loads(r["extras_json"] or "[]")) if "extras_json" in r.keys() else 0 for r in rows)}</div><div class="eng-metric-label">ANEXOS</div></div>', unsafe_allow_html=True)
+    with tb: st.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{sum(len(json.loads(r["fotos_json"] if r["fotos_json"] else "[]")) for r in rows)}</div><div class="eng-metric-label">EVIDÊNCIAS</div></div>', unsafe_allow_html=True)
+    with tc: st.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{sum(len(json.loads(r["extras_json"] if "extras_json" in r.keys() and r["extras_json"] else "[]")) for r in rows)}</div><div class="eng-metric-label">ANEXOS</div></div>', unsafe_allow_html=True)
     st.markdown("<br>", unsafe_allow_html=True)
     st.divider()
 
@@ -903,8 +1106,6 @@ def tela_dashboard():
     st.markdown("---")
     
     secao("🌍", "MAPA TÁTICO DE VISTORIAS (GEOLOCALIZAÇÃO)")
-
-    # ── Seletor de status ───────────────────────────────────────────────────
     col_st1, col_st2 = st.columns([2, 1])
     with col_st1:
         status_opcoes = ["Todos", "✅ Concluída", "⚙️ Em Andamento", "🕐 Pendente"]
@@ -927,7 +1128,6 @@ def tela_dashboard():
         df_mapa = df_mapa.dropna(subset=['latitude', 'longitude'])
         df_mapa = df_mapa[(df_mapa['latitude'] != 0.0) & (df_mapa['longitude'] != 0.0)].reset_index(drop=True)
 
-        # ── Calcular status e cor por ponto ────────────────────────────────
         cores_mapa_filtrado = []
         status_lista        = []
         tem_critico_lista   = []
@@ -955,22 +1155,13 @@ def tela_dashboard():
         df_mapa['status_visita'] = status_lista
         df_mapa['color_rgb']     = cores_mapa_filtrado
         df_mapa['tem_critico']   = tem_critico_lista
-        df_mapa['icone_status']  = df_mapa['status_visita'].map({
-            "Concluída":    "✅",
-            "Em Andamento": "⚙️",
-            "Pendente":     "🕐",
-        })
+        df_mapa['icone_status']  = df_mapa['status_visita'].map({"Concluída": "✅", "Em Andamento": "⚙️", "Pendente": "🕐"})
         df_mapa['alerta_critico'] = df_mapa['tem_critico'].apply(lambda x: "⚠️ ANOMALIA CRÍTICA" if x else "")
 
-        # ── Aplicar filtro de status ───────────────────────────────────────
-        if status_filtro == "✅ Concluída":
-            df_mapa = df_mapa[df_mapa['status_visita'] == "Concluída"]
-        elif status_filtro == "⚙️ Em Andamento":
-            df_mapa = df_mapa[df_mapa['status_visita'] == "Em Andamento"]
-        elif status_filtro == "🕐 Pendente":
-            df_mapa = df_mapa[df_mapa['status_visita'] == "Pendente"]
+        if status_filtro == "✅ Concluída": df_mapa = df_mapa[df_mapa['status_visita'] == "Concluída"]
+        elif status_filtro == "⚙️ Em Andamento": df_mapa = df_mapa[df_mapa['status_visita'] == "Em Andamento"]
+        elif status_filtro == "🕐 Pendente": df_mapa = df_mapa[df_mapa['status_visita'] == "Pendente"]
 
-        # ── Contadores por status ──────────────────────────────────────────
         total_df = df_filtrado.copy()
         total_df['fotos_row'] = total_df['fotos_json'].apply(lambda x: json.loads(x or '[]'))
         n_concluidas   = total_df['fotos_row'].apply(lambda f: len(f) > 0).sum()
@@ -984,54 +1175,17 @@ def tela_dashboard():
         st.markdown("<br>", unsafe_allow_html=True)
 
         if not df_mapa.empty:
-            view_state = pdk.ViewState(
-                latitude=df_mapa['latitude'].mean(),
-                longitude=df_mapa['longitude'].mean(),
-                zoom=11,
-                pitch=0
-            )
-
+            view_state = pdk.ViewState(latitude=df_mapa['latitude'].mean(), longitude=df_mapa['longitude'].mean(), zoom=11, pitch=0)
             layer_pontos = pdk.Layer(
-                "ScatterplotLayer",
-                data=df_mapa,
-                get_position="[longitude, latitude]",
-                get_color="color_rgb",
-                get_radius=220,
-                radiusMinPixels=10,
-                radiusMaxPixels=20,
-                pickable=True,
-                stroked=True,
-                get_line_color=[255, 255, 255, 200],
-                lineWidthMinPixels=2
+                "ScatterplotLayer", data=df_mapa, get_position="[longitude, latitude]", get_color="color_rgb",
+                get_radius=220, radiusMinPixels=10, radiusMaxPixels=20, pickable=True, stroked=True,
+                get_line_color=[255, 255, 255, 200], lineWidthMinPixels=2
             )
-
             tooltip = {
-                "html": (
-                    "<div style='font-family:sans-serif;min-width:200px;'>"
-                    "<b style='font-size:13px;'>📍 {site_id}</b><br>"
-                    "<span style='font-size:11px;'>{icone_status} <b>{status_visita}</b></span>"
-                    "<span style='color:#DA291C;font-weight:bold;'> {alerta_critico}</span><br>"
-                    "👷 {tecnico}<br>📅 {data_hora}<br>🏠 {endereco}"
-                    "</div>"
-                ),
-                "style": {
-                    "backgroundColor": "#002060",
-                    "color": "white",
-                    "borderRadius": "8px",
-                    "padding": "12px",
-                    "fontSize": "12px"
-                }
+                "html": "<div style='font-family:sans-serif;min-width:200px;'><b style='font-size:13px;'>📍 {site_id}</b><br><span style='font-size:11px;'>{icone_status} <b>{status_visita}</b></span><span style='color:#DA291C;font-weight:bold;'> {alerta_critico}</span><br>👷 {tecnico}<br>📅 {data_hora}<br>🏠 {endereco}</div>",
+                "style": {"backgroundColor": "#002060", "color": "white", "borderRadius": "8px", "padding": "12px", "fontSize": "12px"}
             }
-
-            r = pdk.Deck(
-                layers=[layer_pontos],
-                initial_view_state=view_state,
-                tooltip=tooltip,
-                map_style="road"
-            )
-
-            st.pydeck_chart(r, use_container_width=True)
-
+            st.pydeck_chart(pdk.Deck(layers=[layer_pontos], initial_view_state=view_state, tooltip=tooltip, map_style="road"), use_container_width=True)
         else:
             st.info(f"💡 Nenhuma visita com status '{status_filtro}' possui coordenadas de GPS cadastradas.")
     else:
@@ -1049,26 +1203,7 @@ def tela_dashboard():
         st.info("Dados de data insuficientes para gerar a linha do tempo.")
 
     st.markdown("---")
-    secao("📋", "ÚLTIMOS LAUDOS (VISUALIZAÇÃO INTELIGENTE)")
-    
-    df_table = df_filtrado[['id', 'site_id', 'tecnico', 'data_hora', 'qtd_fotos', 'qtd_extras']].head(15)
-    st.dataframe(
-        df_table,
-        column_config={
-            "id": st.column_config.NumberColumn("ID", format="#%d"),
-            "site_id": st.column_config.TextColumn("📍 Identificação do Site"),
-            "tecnico": st.column_config.TextColumn("👷 Técnico"),
-            "data_hora": st.column_config.TextColumn("📅 Data e Hora"),
-            "qtd_fotos": st.column_config.ProgressColumn("📸 Evidências", format="%d", min_value=0, max_value=int(max(df['qtd_fotos'].max(), 1))),
-            "qtd_extras": st.column_config.ProgressColumn("📎 Anexos", format="%d", min_value=0, max_value=int(max(df['qtd_extras'].max(), 1))),
-        },
-        hide_index=True,
-        use_container_width=True
-    )
-
-    st.markdown("---")
     secao("💰", "PAINEL DE ORÇAMENTO — MATERIAIS NECESSÁRIOS")
-
     itens_orc = []
     for _, row_orc in df_filtrado.iterrows():
         fotos_orc = json.loads(row_orc['fotos_json'] or '[]')
@@ -1082,6 +1217,7 @@ def tela_dashboard():
                         'Site':      row_orc['site_id'],
                         'Evidência': foto_orc.get('titulo','—'),
                         'Severidade': foto_orc.get('severidade','Normal'),
+                        'Prazo':     foto_orc.get('prazo_correcao','Monitorar'),
                         'Material':  m.get('descricao',''),
                         'Unidade':   m.get('unidade','un'),
                         'Qtd':       float(m.get('quantidade',1)),
@@ -1105,55 +1241,30 @@ def tela_dashboard():
         oc4.markdown(f'<div class="eng-metric"><div class="eng-metric-val" style="color:#D97706;">{total_semcusto}</div><div class="eng-metric-label">SEM CUSTO INFORMADO</div></div>', unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
-
-        col_filtro_orc, _ = st.columns([1, 2])
-        with col_filtro_orc:
-            sev_filtro_orc = st.selectbox("Filtrar por severidade:", ["Todas","Critico","Observacao","Normal"], key="orc_sev_filtro")
-
         df_orc_view = df_orc.copy()
-        if sev_filtro_orc != "Todas":
-            df_orc_view = df_orc_view[df_orc_view['Severidade'].str.replace('í','i').str.replace('ã','a') == sev_filtro_orc]
-
         df_orc_view['Qtd'] = df_orc_view['Qtd'].apply(lambda x: f"{x:.0f}")
         df_orc_view['Unit_R$']  = df_orc_view['Unit_R$'].apply(lambda x: f"R$ {x:,.2f}")
         df_orc_view['Total_R$'] = df_orc_view['Total_R$'].apply(lambda x: f"R$ {x:,.2f}")
-        df_orc_view = df_orc_view.rename(columns={'Unit_R$':'Unit. R$','Total_R$':'Total R$'})
+        st.dataframe(df_orc_view, hide_index=True, use_container_width=True)
 
-        st.dataframe(
-            df_orc_view[['Site','Evidência','Severidade','Material','Unidade','Qtd','Unit. R$','Total R$']],
-            hide_index=True,
-            use_container_width=True,
-            column_config={
-                'Site':      st.column_config.TextColumn("📍 Site"),
-                'Evidência': st.column_config.TextColumn("📸 Evidência"),
-                'Severidade':st.column_config.TextColumn("⚠️ Severidade"),
-                'Material':  st.column_config.TextColumn("🔧 Material"),
-                'Unidade':   st.column_config.TextColumn("Un."),
-                'Qtd':       st.column_config.TextColumn("Qtd."),
-                'Unit. R$':  st.column_config.TextColumn("Unit. R$"),
-                'Total R$':  st.column_config.TextColumn("Total R$"),
-            }
-        )
-
-        if total_semcusto > 0:
-            st.caption(f"⚠️ {total_semcusto} item(ns) sem custo unitário informado — o total estimado pode estar incompleto.")
-
-        buf_orc = io.BytesIO()
-        with pd.ExcelWriter(buf_orc, engine='openpyxl') as writer:
-            df_orc.to_excel(writer, index=False, sheet_name='Orçamento')
-        st.download_button(
-            label="📥 Exportar Orçamento Excel",
-            data=buf_orc.getvalue(),
-            file_name=f"Orcamento_{datetime.now().strftime('%Y%m%d%H%M%S')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=False
-        )
+    st.markdown("---")
+    secao("🛡️", "LOG DE AUDITORIA (LGPD)")
+    with st.expander("Visualizar Registros de Sistema"):
+        try:
+            with sqlite3.connect(DB_NAME) as conn:
+                df_audit = pd.read_sql_query("SELECT * FROM audit_log ORDER BY id DESC LIMIT 100", conn)
+                if not df_audit.empty:
+                    st.dataframe(df_audit, use_container_width=True, hide_index=True)
+                else:
+                    st.info("Nenhum registro de auditoria encontrado.")
+        except:
+            st.info("Log de auditoria em inicialização.")
 
 # ══════════════════════════════════════════════════════════════════════════
 # MÓDULO: ROTEIRIZAÇÃO TÁTICA (VRP E FIELD SERVICE)
 # ══════════════════════════════════════════════════════════════════════════
 def calcular_distancia_haversine(lon1, lat1, lon2, lat2):
-    R = 6371.0 # Raio da Terra em Km
+    R = 6371.0 
     lon1, lat1, lon2, lat2 = map(math.radians, [lon1, lat1, lon2, lat2])
     dlon = lon2 - lon1
     dlat = lat2 - lat1
@@ -1264,91 +1375,32 @@ def tela_roteirizacao():
 
             df_rota = pd.DataFrame(rota_otimizada)
             df_rota['color_rgb'] = [[22, 163, 74, 200] if i == 0 else [0, 48, 135, 200] for i in range(len(df_rota))]
-            
-            # Formatação explícita de String ('0', '1', '2'...)
             df_rota['seq_label'] = ["0"] + [str(i) for i in range(1, len(df_rota))]
             df_rota['seq_label'] = df_rota['seq_label'].astype(str)
             
-            view_state = pdk.ViewState(
-                latitude=df_rota['lat'].mean(),
-                longitude=df_rota['lon'].mean(),
-                zoom=11,
-                pitch=0
-            )
+            view_state = pdk.ViewState(latitude=df_rota['lat'].mean(), longitude=df_rota['lon'].mean(), zoom=11, pitch=0)
             
             layers_mapa = [
-                pdk.Layer(
-                    "ScatterplotLayer",
-                    data=df_rota,
-                    get_position="[lon, lat]",
-                    get_color="color_rgb",
-                    get_radius=300,
-                    radiusMinPixels=15, 
-                    radiusMaxPixels=25,
-                    pickable=True,
-                    stroked=True,
-                    get_line_color=[255, 255, 255, 200],
-                    lineWidthMinPixels=2
-                ),
-                pdk.Layer(
-                    "TextLayer",
-                    data=df_rota,
-                    get_position="[lon, lat]",
-                    get_text="seq_label",
-                    get_color=[255, 255, 255, 255],
-                    get_size=22, 
-                    sizeScale=1,
-                    get_alignment_baseline="'center'",
-                    get_text_anchor="'middle'"
-                )
+                pdk.Layer("ScatterplotLayer", data=df_rota, get_position="[lon, lat]", get_color="color_rgb", get_radius=300, radiusMinPixels=15, radiusMaxPixels=25, pickable=True, stroked=True, get_line_color=[255, 255, 255, 200], lineWidthMinPixels=2),
+                pdk.Layer("TextLayer", data=df_rota, get_position="[lon, lat]", get_text="seq_label", get_color=[255, 255, 255, 255], get_size=22, sizeScale=1, get_alignment_baseline="'center'", get_text_anchor="'middle'")
             ]
             
             if geojson_rota:
-                layer_linha = pdk.Layer(
-                    "GeoJsonLayer",
-                    data=geojson_rota,
-                    pickable=False,
-                    stroked=True,
-                    filled=False,
-                    extruded=False,
-                    get_line_color=[218, 41, 28, 255],
-                    get_line_width=15,
-                    lineWidthMinPixels=3
-                )
+                layer_linha = pdk.Layer("GeoJsonLayer", data=geojson_rota, pickable=False, stroked=True, filled=False, extruded=False, get_line_color=[218, 41, 28, 255], get_line_width=15, lineWidthMinPixels=3)
                 layers_mapa.append(layer_linha)
             else:
                 path_data = pd.DataFrame([{"path": coords_lista}])
-                layer_linha = pdk.Layer(
-                    "PathLayer",
-                    data=path_data,
-                    get_path="path",
-                    get_color=[218, 41, 28, 200],
-                    width_scale=20,
-                    width_min_pixels=3,
-                    get_width=5
-                )
+                layer_linha = pdk.Layer("PathLayer", data=path_data, get_path="path", get_color=[218, 41, 28, 200], width_scale=20, width_min_pixels=3, get_width=5)
                 layers_mapa.append(layer_linha)
 
-            r = pdk.Deck(
-                layers=layers_mapa,
-                initial_view_state=view_state,
-                tooltip={"text": "Site: {id}"},
-                map_style="road"
-            )
-            
+            r = pdk.Deck(layers=layers_mapa, initial_view_state=view_state, tooltip={"text": "Site: {id}"}, map_style="road")
             st.pydeck_chart(r, use_container_width=True)
             st.markdown(f"<span style='color:#16A34A;font-weight:bold;'>🟢 Base/Origem (0)</span> &nbsp;&nbsp; | &nbsp;&nbsp; <span style='color:{COR_AZUL};font-weight:bold;'>🔵 Sites Alvo (Sequência)</span>", unsafe_allow_html=True)
 
-            # ── Salvar rota no session_state para persistir entre reruns ───
-            st.session_state["_rota_resultado"] = {
-                "rota": rota_otimizada,
-                "distancia_km": distancia_total_km,
-                "duracao_seg": duracao_total_seg,
-            }
+            st.session_state["_rota_resultado"] = {"rota": rota_otimizada, "distancia_km": distancia_total_km, "duracao_seg": duracao_total_seg}
             st.session_state.pop("_rota_pdf_bytes", None)
             st.session_state.pop("_rota_xlsx_bytes", None)
 
-    # ── Painel persistente: evidências + exportação ────────────────────────
     if st.session_state.get("_rota_resultado"):
         _res = st.session_state["_rota_resultado"]
         rota_salva       = _res["rota"]
@@ -1359,26 +1411,16 @@ def tela_roteirizacao():
         st.markdown("---")
         secao("📸", "EVIDÊNCIAS POR SITE — APONTAMENTO DE MATERIAIS")
 
-        # Busca evidências com LIKE para tolerar variações de maiúsculas/espaços
         evidencias_por_site = {}
         with sqlite3.connect(DB_NAME) as conn_ev:
             for p_ev in rota_salva[1:]:
                 sid_ev = p_ev['id']
-                row_ev = conn_ev.execute(
-                    "SELECT fotos_json FROM relatorios WHERE TRIM(UPPER(site_id)) = TRIM(UPPER(?)) ORDER BY id DESC LIMIT 1",
-                    (sid_ev,)
-                ).fetchone()
+                row_ev = conn_ev.execute("SELECT fotos_json FROM relatorios WHERE TRIM(UPPER(site_id)) = TRIM(UPPER(?)) ORDER BY id DESC LIMIT 1", (sid_ev,)).fetchone()
                 fotos_ev = json.loads(row_ev[0]) if row_ev and row_ev[0] else []
                 evidencias_por_site[sid_ev] = fotos_ev
 
-        total_criticos_ui = sum(
-            1 for evs in evidencias_por_site.values()
-            for ev in evs if ev.get('severidade', '') in ('Critico', 'Crítico')
-        )
-        total_obs_ui = sum(
-            1 for evs in evidencias_por_site.values()
-            for ev in evs if ev.get('severidade', '') in ('Observacao', 'Observação')
-        )
+        total_criticos_ui = sum(1 for evs in evidencias_por_site.values() for ev in evs if ev.get('severidade', '') in ('Critico', 'Crítico'))
+        total_obs_ui = sum(1 for evs in evidencias_por_site.values() for ev in evs if ev.get('severidade', '') in ('Observacao', 'Observação'))
         total_fotos_ui = sum(len(evs) for evs in evidencias_por_site.values())
 
         sc1, sc2, sc3 = st.columns(3)
@@ -1387,7 +1429,7 @@ def tela_roteirizacao():
         sc3.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{total_fotos_ui}</div><div class="eng-metric-label">TOTAL DE EVIDÊNCIAS</div></div>', unsafe_allow_html=True)
 
         if total_fotos_ui == 0:
-            st.info("ℹ️ Nenhuma evidência fotográfica encontrada para os sites selecionados. Os relatórios desses sites podem não ter fotos cadastradas.")
+            st.info("ℹ️ Nenhuma evidência fotográfica encontrada para os sites selecionados.")
         else:
             st.markdown("**Aponte os materiais necessários para cada evidência antes de exportar:**")
 
@@ -1418,57 +1460,32 @@ def tela_roteirizacao():
                         ev['material_necessario'] = mat_val
                     st.markdown("---")
 
-        # ── Exportação ─────────────────────────────────────────────────────
         st.markdown("---")
         secao("📤", "EXPORTAR ROTEIRO")
-
         col_pdf, col_xlsx = st.columns(2)
 
         with col_pdf:
             if st.button("📄 Gerar PDF do Roteiro", type="primary", use_container_width=True):
                 with st.spinner("Gerando PDF..."):
-                    _pb, _pn = gerar_pdf_rota(
-                        rota_salva, dist_salva, dur_salva,
-                        tecnico_rota, evidencias_por_site
-                    )
+                    _pb, _pn = gerar_pdf_rota(rota_salva, dist_salva, dur_salva, tecnico_rota, evidencias_por_site)
                 st.session_state["_rota_pdf_bytes"] = _pb
                 st.session_state["_rota_pdf_nome"]  = _pn
                 st.rerun()
 
             if st.session_state.get("_rota_pdf_bytes"):
-                st.download_button(
-                    label="⬇️ Baixar PDF",
-                    data=st.session_state["_rota_pdf_bytes"],
-                    file_name=st.session_state["_rota_pdf_nome"],
-                    mime="application/pdf",
-                    use_container_width=True,
-                    key="dl_pdf_rota"
-                )
+                st.download_button(label="⬇️ Baixar PDF", data=st.session_state["_rota_pdf_bytes"], file_name=st.session_state["_rota_pdf_nome"], mime="application/pdf", use_container_width=True, key="dl_pdf_rota")
 
         with col_xlsx:
             if st.button("📊 Gerar Planilha Excel", use_container_width=True):
                 with st.spinner("Gerando Excel..."):
-                    _xb, _xn = gerar_excel_rota(
-                        rota_salva, dist_salva, dur_salva,
-                        tecnico_rota, evidencias_por_site
-                    )
+                    _xb, _xn = gerar_excel_rota(rota_salva, dist_salva, dur_salva, tecnico_rota, evidencias_por_site)
                 st.session_state["_rota_xlsx_bytes"] = _xb
                 st.session_state["_rota_xlsx_nome"]  = _xn
                 st.rerun()
 
             if st.session_state.get("_rota_xlsx_bytes"):
-                st.download_button(
-                    label="⬇️ Baixar Excel",
-                    data=st.session_state["_rota_xlsx_bytes"],
-                    file_name=st.session_state["_rota_xlsx_nome"],
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                    key="dl_xlsx_rota"
-                )
+                st.download_button(label="⬇️ Baixar Excel", data=st.session_state["_rota_xlsx_bytes"], file_name=st.session_state["_rota_xlsx_nome"], mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, key="dl_xlsx_rota")
 
-# ==============================================================================
-# EXPORTAÇÃO DA ROTEIRIZAÇÃO
-# ==============================================================================
 def _css_rota_pdf() -> str:
     return f"""
     @page {{ size: A4; margin: 14mm 14mm 18mm 14mm;
@@ -1503,7 +1520,6 @@ def _css_rota_pdf() -> str:
     """
 
 def gerar_pdf_rota(rota_otimizada, distancia_km, duracao_seg, tecnico, evidencias_por_site) -> tuple[bytes, str]:
-    """Gera PDF da roteirização com KPIs, sequenciamento e painel de materiais/evidências."""
     densidade = len(rota_otimizada[1:]) / distancia_km if distancia_km > 0 else 0
     kpi_html = f"""
     <div class="kpi-grid">
@@ -1587,12 +1603,8 @@ def gerar_pdf_rota(rota_otimizada, distancia_km, duracao_seg, tecnico, evidencia
     pdf_bytes = HTML(string=html).write_pdf()
     return pdf_bytes, nome
 
-
 def gerar_excel_rota(rota_otimizada, distancia_km, duracao_seg, tecnico, evidencias_por_site) -> tuple[bytes, str]:
-    """Gera planilha Excel com KPIs, sequenciamento e materiais por site."""
     wb = openpyxl.Workbook()
-
-    # ── Estilos ──
     azul_fill = PatternFill("solid", fgColor="002060")
     azul_med_fill = PatternFill("solid", fgColor="003087")
     cinza_fill = PatternFill("solid", fgColor="EBF0FA")
@@ -1601,12 +1613,7 @@ def gerar_excel_rota(rota_otimizada, distancia_km, duracao_seg, tecnico, evidenc
     verde_fill = PatternFill("solid", fgColor="16A34A")
     branco_font = Font(color="FFFFFF", bold=True)
     azul_font = Font(color="002060", bold=True)
-    borda = Border(
-        left=Side(style='thin', color="CBD5E1"),
-        right=Side(style='thin', color="CBD5E1"),
-        top=Side(style='thin', color="CBD5E1"),
-        bottom=Side(style='thin', color="CBD5E1")
-    )
+    borda = Border(left=Side(style='thin', color="CBD5E1"), right=Side(style='thin', color="CBD5E1"), top=Side(style='thin', color="CBD5E1"), bottom=Side(style='thin', color="CBD5E1"))
 
     def _cab(ws, col, row, texto, fill=None, bold=True, center=False):
         cell = ws.cell(row=row, column=col, value=texto)
@@ -1624,7 +1631,6 @@ def gerar_excel_rota(rota_otimizada, distancia_km, duracao_seg, tecnico, evidenc
         cell.border = borda
         return cell
 
-    # ── Aba 1: KPIs ──
     ws1 = wb.active
     ws1.title = "KPIs da Operação"
     ws1.column_dimensions['A'].width = 32
@@ -1651,7 +1657,6 @@ def gerar_excel_rota(rota_otimizada, distancia_km, duracao_seg, tecnico, evidenc
         _cab(ws1, 1, i, k)
         _val(ws1, 2, i, v)
 
-    # ── Aba 2: Sequenciamento ──
     ws2 = wb.create_sheet("Sequenciamento")
     for w, col in zip([8, 22, 18, 18], range(1, 5)):
         ws2.column_dimensions[get_column_letter(col)].width = w
@@ -1669,7 +1674,6 @@ def gerar_excel_rota(rota_otimizada, distancia_km, duracao_seg, tecnico, evidenc
         _val(ws2, 3, r, p.get('lat', ''), fill_r)
         _val(ws2, 4, r, p.get('lon', ''), fill_r)
 
-    # ── Aba 3: Evidências e Materiais ──
     ws3 = wb.create_sheet("Evidências e Materiais")
     for w, col in zip([22, 26, 16, 36, 30], range(1, 6)):
         ws3.column_dimensions[get_column_letter(col)].width = w
@@ -1702,10 +1706,6 @@ def gerar_excel_rota(rota_otimizada, distancia_km, duracao_seg, tecnico, evidenc
     nome = f"Roteiro_{datetime.now().strftime('%Y%m%d%H%M%S')}.xlsx"
     return buf.getvalue(), nome
 
-
-# ==============================================================================
-# ENTRY POINT
-# ==============================================================================
 st.set_page_config(page_title="GIRCP | Controle Fotográfico", page_icon="⚡", layout="wide", initial_sidebar_state="expanded")
 
 if not check_password():
