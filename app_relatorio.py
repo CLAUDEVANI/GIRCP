@@ -188,8 +188,35 @@ def gerar_pdf(dados: dict, fotos: list, extras: list = None) -> tuple[bytes, str
         cat  = sanitizar(f.get('categoria', 'Geral'))
         sev_norm = sev.replace('ã','a').replace('Ã','A')
         badge_html = f'<span class="badge {cls_b}">{sanitizar(sev)}</span>' if sev_norm not in ('Normal', '') else ''
-        mat  = sanitizar(f.get('material_necessario', '').strip())
-        mat_html_bloco = f'<div class="label-desc" style="margin-top:8px;color:#DA291C;">🔧 Material Necessário:</div><div class="foto-desc" style="border-left-color:#DA291C;">{mat}</div>' if mat else ''
+        mats_list = f.get('materiais') or []
+        if not mats_list and f.get('material_necessario','').strip():
+            mats_list = [{'descricao': f.get('material_necessario',''), 'unidade':'un', 'quantidade':1, 'custo_unit':0.0}]
+        if mats_list and any(m.get('descricao','').strip() for m in mats_list):
+            subtotal_ev = sum(m.get('quantidade',0)*m.get('custo_unit',0) for m in mats_list)
+            rows_mat = "".join(
+                "<tr><td style='padding:3px 8px;border:1px solid #e2e8f0;'>" + sanitizar(m.get('descricao','')) + "</td>"
+                "<td style='padding:3px 8px;border:1px solid #e2e8f0;text-align:center;'>" + sanitizar(m.get('unidade','un')) + "</td>"
+                "<td style='padding:3px 8px;border:1px solid #e2e8f0;text-align:center;'>" + str(int(m.get('quantidade',1))) + "</td>"
+                "<td style='padding:3px 8px;border:1px solid #e2e8f0;text-align:right;'>R$ " + f"{m.get('custo_unit',0):.2f}" + "</td>"
+                "<td style='padding:3px 8px;border:1px solid #e2e8f0;text-align:right;font-weight:bold;'>R$ " + f"{m.get('quantidade',0)*m.get('custo_unit',0):.2f}" + "</td></tr>"
+                for m in mats_list if m.get('descricao','').strip()
+            )
+            subtotal_html = (
+                "<tr style='background:#fef2f2;'><td colspan='4' style='padding:3px 8px;border:1px solid #e2e8f0;text-align:right;font-weight:bold;color:#DA291C;'>Subtotal</td>"
+                "<td style='padding:3px 8px;border:1px solid #e2e8f0;text-align:right;font-weight:bold;color:#DA291C;'>R$ " + f"{subtotal_ev:.2f}" + "</td></tr>"
+            ) if subtotal_ev > 0 else ""
+            mat_html_bloco = (
+                '<div class="label-desc" style="margin-top:8px;color:#DA291C;">🔧 Materiais para Correção:</div>'
+                '<table style="width:100%;border-collapse:collapse;font-size:8pt;margin-top:4px;">'
+                '<tr style="background:#fef2f2;"><th style="padding:3px 8px;border:1px solid #e2e8f0;text-align:left;">Material</th>'
+                '<th style="padding:3px 8px;border:1px solid #e2e8f0;">Un.</th>'
+                '<th style="padding:3px 8px;border:1px solid #e2e8f0;">Qtd.</th>'
+                '<th style="padding:3px 8px;border:1px solid #e2e8f0;">Unit. R$</th>'
+                '<th style="padding:3px 8px;border:1px solid #e2e8f0;">Total R$</th></tr>'
+                + rows_mat + subtotal_html + '</table>'
+            )
+        else:
+            mat_html_bloco = ''
         fotos_html += f"""
         <table class="card-evidencia">
           <tr>
@@ -491,16 +518,33 @@ def tela_novo():
                 with c_dados:
                     tit = st.text_input(LBL_TITULO, key=f"t_{safe_key}")
                     com = st.text_area(LBL_DESCRICAO, key=f"c_{safe_key}", height=75)
-                    mat = st.text_input("🔧 MATERIAL NECESSÁRIO", key=f"mat_{safe_key}", placeholder="Ex: Cabo 6mm², Disjuntor 40A...")
                     c_sev, c_cat = st.columns(2)
                     with c_sev: sev = st.selectbox("SEVERIDADE", ["Normal", "Observacao", "Critico"], key=f"sev_{safe_key}")
                     with c_cat: cat = st.selectbox("CATEGORIA",  ["Geral", "Antes", "Depois", "Detalhe"], key=f"cat_{safe_key}")
-                    
+                    st.markdown("**🔧 Materiais necessários**")
+                    mat_list_key = f"mats_{safe_key}"
+                    if mat_list_key not in st.session_state:
+                        st.session_state[mat_list_key] = [{"descricao": "", "unidade": "un", "quantidade": 1, "custo_unit": 0.0}]
+                    for mi, mitem in enumerate(st.session_state[mat_list_key]):
+                        mc1, mc2, mc3, mc4, mc5 = st.columns([3, 1.2, 1, 1.4, 0.5])
+                        mitem["descricao"]  = mc1.text_input("Descrição", value=mitem["descricao"],  key=f"md_{safe_key}_{mi}", label_visibility="collapsed", placeholder="Ex: Disjuntor 40A")
+                        mitem["unidade"]    = mc2.selectbox("Un.", ["un","m","kg","kit","cx","hr"], index=["un","m","kg","kit","cx","hr"].index(mitem["unidade"]), key=f"mu_{safe_key}_{mi}", label_visibility="collapsed")
+                        mitem["quantidade"] = mc3.number_input("Qtd", value=float(mitem["quantidade"]), min_value=0.0, step=1.0, key=f"mq_{safe_key}_{mi}", label_visibility="collapsed")
+                        mitem["custo_unit"] = mc4.number_input("R$ unit.", value=float(mitem["custo_unit"]), min_value=0.0, step=0.01, format="%.2f", key=f"mc_{safe_key}_{mi}", label_visibility="collapsed")
+                        if mc5.button("❌", key=f"mdel_{safe_key}_{mi}") and len(st.session_state[mat_list_key]) > 1:
+                            st.session_state[mat_list_key].pop(mi); st.rerun()
+                    if st.button("＋ Adicionar material", key=f"madd_{safe_key}"):
+                        st.session_state[mat_list_key].append({"descricao": "", "unidade": "un", "quantidade": 1, "custo_unit": 0.0}); st.rerun()
+                    subtotal = sum(m["quantidade"] * m["custo_unit"] for m in st.session_state[mat_list_key])
+                    if subtotal > 0:
+                        st.markdown(f"<div style='text-align:right;font-size:12px;color:{COR_AZUL};'>Subtotal: <strong>R$ {subtotal:,.2f}</strong></div>", unsafe_allow_html=True)
+
                     fotos_proc.append({
                         "foto_id": foto_id, "caminho": caminho_foto, "type": "image/jpeg",
                         "titulo": tit.strip() or f"Evidência {idx+1}", "comentarios": com.strip() or "N/A",
                         "filename": arquivo.name, "severidade": sev, "categoria": cat,
-                        "material_necessario": mat.strip(),
+                        "materiais": st.session_state.get(mat_list_key, []),
+                        "material_necessario": ", ".join(m["descricao"] for m in st.session_state.get(mat_list_key, []) if m["descricao"].strip()),
                     })
 
         secao("📎", "3. ANEXOS ADICIONAIS")
@@ -603,7 +647,25 @@ def _render_item_edicao(f, k, lid, prefixo, total_fotos, db_field):
     with col_d:
         nt = st.text_input(LBL_TITULO, value=f.get('titulo', ''), key=f"{prefixo}t_{lid}_{fid}")
         nc = st.text_area(LBL_DESCRICAO, value=f.get('comentarios', ''), key=f"{prefixo}c_{lid}_{fid}", height=65)
-        nm = st.text_input("🔧 MATERIAL NECESSÁRIO", value=f.get('material_necessario', ''), key=f"{prefixo}m_{lid}_{fid}", placeholder="Ex: Cabo 6mm², Disjuntor 40A...")
+        st.markdown("**🔧 Materiais necessários**")
+        emat_key = f"emats_{prefixo}_{lid}_{fid}"
+        mats_default = f.get('materiais') or ([{"descricao": f.get('material_necessario',''), "unidade":"un","quantidade":1,"custo_unit":0.0}] if f.get('material_necessario','').strip() else [{"descricao":"","unidade":"un","quantidade":1,"custo_unit":0.0}])
+        if emat_key not in st.session_state:
+            st.session_state[emat_key] = mats_default
+        for mi, mitem in enumerate(st.session_state[emat_key]):
+            ec1, ec2, ec3, ec4, ec5 = st.columns([3, 1.2, 1, 1.4, 0.5])
+            mitem["descricao"]  = ec1.text_input("Descrição", value=mitem.get("descricao",""),  key=f"emd_{prefixo}_{lid}_{fid}_{mi}", label_visibility="collapsed", placeholder="Ex: Disjuntor 40A")
+            mitem["unidade"]    = ec2.selectbox("Un.", ["un","m","kg","kit","cx","hr"], index=["un","m","kg","kit","cx","hr"].index(mitem.get("unidade","un")), key=f"emu_{prefixo}_{lid}_{fid}_{mi}", label_visibility="collapsed")
+            mitem["quantidade"] = ec3.number_input("Qtd", value=float(mitem.get("quantidade",1)), min_value=0.0, step=1.0, key=f"emq_{prefixo}_{lid}_{fid}_{mi}", label_visibility="collapsed")
+            mitem["custo_unit"] = ec4.number_input("R$ unit.", value=float(mitem.get("custo_unit",0.0)), min_value=0.0, step=0.01, format="%.2f", key=f"emc_{prefixo}_{lid}_{fid}_{mi}", label_visibility="collapsed")
+            if ec5.button("❌", key=f"emdel_{prefixo}_{lid}_{fid}_{mi}") and len(st.session_state[emat_key]) > 1:
+                st.session_state[emat_key].pop(mi); st.rerun()
+        if st.button("＋ Adicionar material", key=f"emadd_{prefixo}_{lid}_{fid}"):
+            st.session_state[emat_key].append({"descricao":"","unidade":"un","quantidade":1,"custo_unit":0.0}); st.rerun()
+        esubtotal = sum(m.get("quantidade",0)*m.get("custo_unit",0) for m in st.session_state[emat_key])
+        if esubtotal > 0:
+            st.markdown(f"<div style='text-align:right;font-size:12px;color:{COR_AZUL};'>Subtotal: <strong>R$ {esubtotal:,.2f}</strong></div>", unsafe_allow_html=True)
+        nm = ", ".join(m["descricao"] for m in st.session_state[emat_key] if m.get("descricao","").strip())
     with col_ctrl:
         st.markdown("<br>", unsafe_allow_html=True)
         if k > 0 and st.button("⬆️", key=f"{prefixo}up_{lid}_{fid}"):
@@ -612,7 +674,9 @@ def _render_item_edicao(f, k, lid, prefixo, total_fotos, db_field):
             _executar_acao_inline(lid, fid, "down", prefixo, db_field); st.rerun()
         if st.button("❌", key=f"{prefixo}del_{lid}_{fid}"):
             _executar_acao_inline(lid, fid, "del", prefixo, db_field); st.rerun()
+    emat_key2 = f"emats_{prefixo}_{lid}_{fid}"
     fc = f.copy(); fc['titulo'] = nt; fc['comentarios'] = nc; fc['material_necessario'] = nm
+    fc['materiais'] = st.session_state.get(emat_key2, f.get('materiais', []))
     return fc
 
 def _render_edicao_lista(fotos, lid, titulo_sec, icone, prefixo):
@@ -1001,6 +1065,89 @@ def tela_dashboard():
         hide_index=True,
         use_container_width=True
     )
+
+    st.markdown("---")
+    secao("💰", "PAINEL DE ORÇAMENTO — MATERIAIS NECESSÁRIOS")
+
+    itens_orc = []
+    for _, row_orc in df_filtrado.iterrows():
+        fotos_orc = json.loads(row_orc['fotos_json'] or '[]')
+        for foto_orc in fotos_orc:
+            mats_orc = foto_orc.get('materiais') or []
+            if not mats_orc and foto_orc.get('material_necessario','').strip():
+                mats_orc = [{'descricao': foto_orc['material_necessario'], 'unidade':'un', 'quantidade':1, 'custo_unit':0.0}]
+            for m in mats_orc:
+                if m.get('descricao','').strip():
+                    itens_orc.append({
+                        'Site':      row_orc['site_id'],
+                        'Evidência': foto_orc.get('titulo','—'),
+                        'Severidade': foto_orc.get('severidade','Normal'),
+                        'Material':  m.get('descricao',''),
+                        'Unidade':   m.get('unidade','un'),
+                        'Qtd':       float(m.get('quantidade',1)),
+                        'Unit_R$':   float(m.get('custo_unit',0.0)),
+                        'Total_R$':  float(m.get('quantidade',1)) * float(m.get('custo_unit',0.0)),
+                    })
+
+    if not itens_orc:
+        st.info("Nenhum material estruturado cadastrado nas evidências dos laudos filtrados.")
+    else:
+        df_orc = pd.DataFrame(itens_orc)
+        total_geral   = df_orc['Total_R$'].sum()
+        n_criticos    = df_orc[df_orc['Severidade'].isin(['Critico','Crítico'])].shape[0]
+        n_materiais   = df_orc['Material'].nunique()
+        total_semcusto = df_orc[df_orc['Unit_R$'] == 0].shape[0]
+
+        oc1, oc2, oc3, oc4 = st.columns(4)
+        oc1.markdown(f'<div class="eng-metric"><div class="eng-metric-val" style="color:{COR_AZUL};">R$ {total_geral:,.2f}</div><div class="eng-metric-label">TOTAL ESTIMADO</div></div>', unsafe_allow_html=True)
+        oc2.markdown(f'<div class="eng-metric"><div class="eng-metric-val" style="color:#DA291C;">{n_criticos}</div><div class="eng-metric-label">ITENS CRÍTICOS</div></div>', unsafe_allow_html=True)
+        oc3.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{n_materiais}</div><div class="eng-metric-label">MATERIAIS DISTINTOS</div></div>', unsafe_allow_html=True)
+        oc4.markdown(f'<div class="eng-metric"><div class="eng-metric-val" style="color:#D97706;">{total_semcusto}</div><div class="eng-metric-label">SEM CUSTO INFORMADO</div></div>', unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        col_filtro_orc, _ = st.columns([1, 2])
+        with col_filtro_orc:
+            sev_filtro_orc = st.selectbox("Filtrar por severidade:", ["Todas","Critico","Observacao","Normal"], key="orc_sev_filtro")
+
+        df_orc_view = df_orc.copy()
+        if sev_filtro_orc != "Todas":
+            df_orc_view = df_orc_view[df_orc_view['Severidade'].str.replace('í','i').str.replace('ã','a') == sev_filtro_orc]
+
+        df_orc_view['Qtd'] = df_orc_view['Qtd'].apply(lambda x: f"{x:.0f}")
+        df_orc_view['Unit_R$']  = df_orc_view['Unit_R$'].apply(lambda x: f"R$ {x:,.2f}")
+        df_orc_view['Total_R$'] = df_orc_view['Total_R$'].apply(lambda x: f"R$ {x:,.2f}")
+        df_orc_view = df_orc_view.rename(columns={'Unit_R$':'Unit. R$','Total_R$':'Total R$'})
+
+        st.dataframe(
+            df_orc_view[['Site','Evidência','Severidade','Material','Unidade','Qtd','Unit. R$','Total R$']],
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                'Site':      st.column_config.TextColumn("📍 Site"),
+                'Evidência': st.column_config.TextColumn("📸 Evidência"),
+                'Severidade':st.column_config.TextColumn("⚠️ Severidade"),
+                'Material':  st.column_config.TextColumn("🔧 Material"),
+                'Unidade':   st.column_config.TextColumn("Un."),
+                'Qtd':       st.column_config.TextColumn("Qtd."),
+                'Unit. R$':  st.column_config.TextColumn("Unit. R$"),
+                'Total R$':  st.column_config.TextColumn("Total R$"),
+            }
+        )
+
+        if total_semcusto > 0:
+            st.caption(f"⚠️ {total_semcusto} item(ns) sem custo unitário informado — o total estimado pode estar incompleto.")
+
+        buf_orc = io.BytesIO()
+        with pd.ExcelWriter(buf_orc, engine='openpyxl') as writer:
+            df_orc.to_excel(writer, index=False, sheet_name='Orçamento')
+        st.download_button(
+            label="📥 Exportar Orçamento Excel",
+            data=buf_orc.getvalue(),
+            file_name=f"Orcamento_{datetime.now().strftime('%Y%m%d%H%M%S')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=False
+        )
 
 # ══════════════════════════════════════════════════════════════════════════
 # MÓDULO: ROTEIRIZAÇÃO TÁTICA (VRP E FIELD SERVICE)

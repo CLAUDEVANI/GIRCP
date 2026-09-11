@@ -4,9 +4,37 @@ Aplicação web de missão crítica desenvolvida em Python com Streamlit para cr
 
 ---
 
-## ✨ O que há de novo na v3.5.0?
+## ✨ O que há de novo na v3.6.0?
 
-A versão 3.5.0 expande o módulo de Roteirização Tática com exportação completa de roteiros, rastreamento de materiais por evidência e inteligência de status no mapa tático do Dashboard.
+A versão 3.6.0 transforma o campo de material livre em um painel estruturado de itens por evidência, permitindo controle completo de quantidade, unidade e custo unitário para geração de orçamentos precisos.
+
+### 🔧 Materiais por Evidência — Estrutura de Orçamento
+O campo "Material Necessário" foi reformulado de texto livre para um painel de itens por linha, disponível no cadastro de novos laudos e na edição de laudos existentes:
+* **4 colunas por item:** Descrição | Unidade (un / m / kg / kit / cx / hr) | Quantidade | Custo Unitário R$.
+* Botão **＋ Adicionar material** para múltiplos itens por evidência e botão ❌ para remover.
+* **Subtotal por evidência** calculado em tempo real quando o custo é informado.
+* **Retrocompatível:** laudos antigos com material em texto puro são migrados automaticamente para a nova estrutura ao abrir para edição.
+* O campo `material_necessario` legado é mantido como string concatenada para não quebrar exportações existentes.
+
+### 💰 Painel de Orçamento no Dashboard
+Nova seção "Painel de Orçamento — Materiais Necessários" ao final do Dashboard Analítico:
+* **4 KPIs:** Total Estimado (R$) / Itens Críticos / Materiais Distintos / Itens sem Custo Informado.
+* **Tabela consolidada** com todos os materiais de todos os laudos filtrados, exibindo site, evidência, severidade, material, unidade, quantidade, custo unitário e total por linha.
+* **Filtro por severidade** (Todas / Critico / Observacao / Normal).
+* **Exportação Excel** do orçamento completo com um clique.
+* Alerta automático quando há itens sem custo unitário preenchido, indicando que o total estimado pode estar incompleto.
+
+### 📄 PDF do Laudo — Tabela de Materiais
+O bloco de material no PDF do laudo foi atualizado de texto simples para mini-tabela por evidência:
+* Colunas: Material | Un. | Qtd. | Unit. R$ | Total R$.
+* Subtotal por evidência em destaque vermelho.
+* Evidências sem material continuam sem o bloco, sem poluir o documento.
+
+---
+
+## ✨ Histórico — v3.5.0
+
+A versão 3.5.0 expandiu o módulo de Roteirização Tática com exportação completa de roteiros, rastreamento de materiais por evidência e inteligência de status no mapa tático do Dashboard.
 
 ### 📤 Exportação de Roteiro (PDF e Excel)
 Após otimizar a rota, um novo painel de exportação é gerado automaticamente abaixo do mapa:
@@ -54,7 +82,8 @@ A versão 3.4.1 trouxe inteligência logística e renderização antibloqueio:
 * **Banco de Dados Local Otimizado:** SQLite com `PRAGMA journal_mode=WAL`, metadados em JSON e imagens comprimidas em disco.
 * **Motor de Edição:** Pesquisa, expansão de card, edição de textos e coordenadas, reordenação e adição de novas fotos inline.
 * **PDF Corporativo:** WeasyPrint renderizando HTML/CSS com marca d'água, logotipo, badges de severidade, campo de material necessário, assinatura digital e rodapé LGPD.
-* **Dashboard Analítico:** KPIs gerais, gráfico de produtividade por site, distribuição de severidade, mapa tático com status de visitas e linha do tempo de vistorias.
+* **Dashboard Analítico:** KPIs gerais, gráfico de produtividade por site, distribuição de severidade, mapa tático com status de visitas, linha do tempo de vistorias e **painel de orçamento** consolidado com exportação Excel.
+* **Controle de Orçamento:** Materiais estruturados por evidência (descrição, unidade, quantidade, custo unitário), subtotal por foto, total consolidado por laudo e visão gerencial no Dashboard.
 * **Roteirização Tática:** Otimização TSP + ORS, mapa de rota, métricas de field service, painel de evidências/materiais por site e exportação em PDF e Excel.
 
 ---
@@ -135,6 +164,8 @@ graph TD
 
     O --> R[Analisar KPIs de Severidade e Produtividade]
     O --> S[Mapa Tático com Status: Concluída / Em Andamento / Crítica]
+    O --> T[Painel de Orçamento — Materiais Consolidados]
+    T --> AB[Exportar Orçamento Excel]
 
     U --> V[Definir Ponto de Partida]
     V --> W[Selecionar Sites Alvo]
