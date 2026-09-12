@@ -1,6 +1,6 @@
 """
 GIRCP — Gerador Inteligente de Relatórios e Controle Fotográfico
-| v3.7.1 (Sprints 1, 2 e 3 + Correção SQLite Row)
+| v3.7.2 (Sprints 1, 2, 3 + Ajustes Visuais de Layout PDF)
 """
 
 import streamlit as st
@@ -300,10 +300,10 @@ def gerar_pdf(dados: dict, fotos: list, extras: list = None) -> tuple[bytes, str
                 '<div class="label-desc" style="margin-top:8px;color:#DA291C;">🔧 Materiais para Correção:</div>'
                 '<table style="width:100%;border-collapse:collapse;font-size:8pt;margin-top:4px;">'
                 '<tr style="background:#fef2f2;"><th style="padding:3px 8px;border:1px solid #e2e8f0;text-align:left;">Material</th>'
-                '<th style="padding:3px 8px;border:1px solid #e2e8f0;">Un.</th>'
-                '<th style="padding:3px 8px;border:1px solid #e2e8f0;">Qtd.</th>'
-                '<th style="padding:3px 8px;border:1px solid #e2e8f0;">Unit. R$</th>'
-                '<th style="padding:3px 8px;border:1px solid #e2e8f0;">Total R$</th></tr>'
+                '<th style="padding:3px 8px;border:1px solid #e2e8f0; width:10%;">Un.</th>'
+                '<th style="padding:3px 8px;border:1px solid #e2e8f0; width:10%;">Qtd.</th>'
+                '<th style="padding:3px 8px;border:1px solid #e2e8f0; width:18%;">Unit. R$</th>'
+                '<th style="padding:3px 8px;border:1px solid #e2e8f0; width:22%; min-width:70px;">Total R$</th></tr>'
                 + rows_mat + subtotal_html + '</table>'
             )
 
@@ -358,7 +358,7 @@ def gerar_pdf(dados: dict, fotos: list, extras: list = None) -> tuple[bytes, str
     """
 
     qr_b64 = _gerar_qrcode_b64(f"{dados.get('numero_relatorio', 'GIRCP')} - {dados.get('site_id', '')}")
-    qr_html = f'<img src="data:image/png;base64,{qr_b64}" style="width:65px; margin-bottom:-15px;"/>'
+    qr_html = f'<img src="data:image/png;base64,{qr_b64}" style="width:70px; display:block; margin: 0 auto 5px auto;"/>'
 
     html_raw = f"""<!DOCTYPE html>
 <html lang="pt-BR"><head><meta charset="utf-8"><style>{_css_pdf()}</style></head>
@@ -382,7 +382,7 @@ def gerar_pdf(dados: dict, fotos: list, extras: list = None) -> tuple[bytes, str
 {fotos_html}
 {extras_html}
 {conclusao_html}
-<div class="assinatura-wrapper">{qr_html}<br>{sig_img}<div class="assinatura-linha"></div><div class="assinatura-nome">{sanitizar(dados.get('contato','Responsável Técnico'))}</div><div class="assinatura-cargo">Responsável Técnico</div><div class="logo-wrapper">{logo_img}</div></div>
+<div class="assinatura-wrapper">{qr_html}{sig_img}<div class="assinatura-linha"></div><div class="assinatura-nome">{sanitizar(dados.get('contato','Responsável Técnico'))}</div><div class="assinatura-cargo">Responsável Técnico</div><div class="logo-wrapper">{logo_img}</div></div>
 </body></html>"""
 
     nome = f"Relatorio_{sanitizar(dados.get('site_id','SITE')).replace(' ','_')}_{datetime.now().strftime('%Y%m%d%H%M%S')}.pdf"
