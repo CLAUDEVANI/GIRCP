@@ -407,6 +407,19 @@ def aplicar_estilo():
     .eng-metric {{ background: #fff; border: 1.5px solid {COR_BORDA}; border-radius: 8px; padding: 14px 10px; text-align: center; }}
     .eng-metric-val {{ font-size: 26px; font-weight: 900; color: {COR_AZUL}; line-height: 1.1; }}
     .eng-metric-label {{ font-size: 10px; color: {COR_CINZA}; text-transform: uppercase; margin-top: 4px; letter-spacing: 0.5px; }}
+    .sla-box {{ border-radius: 8px; padding: 10px 14px; margin-top: 4px; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; }}
+    .sla-imediato {{ background: #fff1f0; border: 2px solid #DA291C; color: #7f1d1d; animation: sla-pulse 1.4s infinite; }}
+    .sla-urgente  {{ background: #fff7ed; border: 2px solid #ea580c; color: #7c2d12; }}
+    .sla-planejado{{ background: #eff6ff; border: 2px solid #2563eb; color: #1e3a8a; }}
+    .sla-monitorar{{ background: #f8fafc; border: 2px solid {COR_BORDA}; color: {COR_CINZA}; }}
+    @keyframes sla-pulse {{ 0%,100%{{opacity:1}} 50%{{opacity:.55}} }}
+    .sla-kpi {{ border-radius: 10px; padding: 16px 12px; text-align: center; border: 2px solid transparent; }}
+    .sla-kpi-imediato {{ background:#fff1f0; border-color:#DA291C; }}
+    .sla-kpi-urgente  {{ background:#fff7ed; border-color:#ea580c; }}
+    .sla-kpi-planejado{{ background:#eff6ff; border-color:#2563eb; }}
+    .sla-kpi-monitorar{{ background:#f8fafc; border-color:{COR_BORDA}; }}
+    .sla-kpi-val {{ font-size: 28px; font-weight: 900; line-height: 1.1; }}
+    .sla-kpi-lbl {{ font-size: 10px; text-transform: uppercase; margin-top: 4px; letter-spacing: .5px; }}
     </style>""", unsafe_allow_html=True)
 
 def banner(subtitulo: str = ""):
@@ -529,6 +542,43 @@ def _salvar_novo_relatorio(dados_cad, fotos, extras):
     st.success(f"✅ RELATÓRIO **{sanitizar(dados_cad['site_id'])}** SALVO! ACESSE A ABA PARA GERAR PDF.")
     st.balloons()
 
+_SLA_META = {
+    "Imediato (0–24h)":       {"cls": "sla-imediato",  "icone": "🔴", "cor": "#DA291C"},
+    "Urgente (até 7 dias)":   {"cls": "sla-urgente",   "icone": "🟠", "cor": "#ea580c"},
+    "Planejado (até 30 dias)":{"cls": "sla-planejado", "icone": "🔵", "cor": "#2563eb"},
+    "Monitorar":              {"cls": "sla-monitorar", "icone": "⚪", "cor": "#64748B"},
+}
+_SLA_KPI_CLS = {
+    "Imediato (0–24h)":       "sla-kpi-imediato",
+    "Urgente (até 7 dias)":   "sla-kpi-urgente",
+    "Planejado (até 30 dias)":"sla-kpi-planejado",
+    "Monitorar":              "sla-kpi-monitorar",
+}
+_SLA_KPI_COR = {
+    "Imediato (0–24h)":       "#DA291C",
+    "Urgente (até 7 dias)":   "#ea580c",
+    "Planejado (até 30 dias)":"#2563eb",
+    "Monitorar":              "#64748B",
+}
+
+def _sla_badge_html(prazo: str) -> str:
+    m = _SLA_META.get(prazo, _SLA_META["Monitorar"])
+    return f'<div class="sla-box {m["cls"]}">{m["icone"]} SLA: {sanitizar(prazo)}</div>'
+
+def _btn_destaque_js(site_id: str, prazo: str = "", ev: str = "") -> str:
+    """Retorna HTML de botão que abre a tela de destaque em nova aba."""
+    import urllib.parse
+    params = {"destaque": site_id}
+    if prazo: params["prazo"] = prazo
+    if ev:    params["ev"]    = ev
+    qs = urllib.parse.urlencode(params)
+    return (
+        f'<a href="/?{qs}" target="_blank" '
+        f'style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;'
+        f'background:#002060;color:#fff;border-radius:6px;font-size:11px;font-weight:600;'
+        f'text-decoration:none;cursor:pointer;" title="Destacar em nova tela">🖥️ Destacar</a>'
+    )
+
 def tela_novo():
     banner("NOVO RELATÓRIO")
     if "ordem_evidencias" not in st.session_state: st.session_state["ordem_evidencias"] = []
@@ -631,7 +681,9 @@ def tela_novo():
                 c_sev, c_cat, c_prazo = st.columns(3)
                 with c_sev: sev = st.selectbox("SEVERIDADE", ["Normal", "Observacao", "Critico"], key=f"sev_{safe_key}")
                 with c_cat: cat = st.selectbox("CATEGORIA",  ["Geral", "Antes", "Depois", "Detalhe"], key=f"cat_{safe_key}")
-                with c_prazo: prazo = st.selectbox("PRAZO", ["Imediato (0–24h)", "Urgente (até 7 dias)", "Planejado (até 30 dias)", "Monitorar"], key=f"prazo_{safe_key}")
+                with c_prazo:
+                    prazo = st.selectbox("PRAZO / SLA", ["Imediato (0–24h)", "Urgente (até 7 dias)", "Planejado (até 30 dias)", "Monitorar"], key=f"prazo_{safe_key}")
+                    st.markdown(_sla_badge_html(prazo), unsafe_allow_html=True)
                 
                 st.markdown("**🔧 Materiais necessários**")
                 mat_list_key = f"mats_{safe_key}"
@@ -817,7 +869,8 @@ def _render_item_edicao(f, k, lid, prefixo, total_fotos, db_field):
     with col_d:
         nt = st.text_input(LBL_TITULO, value=f.get('titulo', ''), key=f"{prefixo}t_{lid}_{fid}")
         nc = st.text_area(LBL_DESCRICAO, value=f.get('comentarios', ''), key=f"{prefixo}c_{lid}_{fid}", height=65)
-        nprazo = st.selectbox("PRAZO", ["Imediato (0–24h)", "Urgente (até 7 dias)", "Planejado (até 30 dias)", "Monitorar"], index=["Imediato (0–24h)", "Urgente (até 7 dias)", "Planejado (até 30 dias)", "Monitorar"].index(f.get("prazo_correcao", "Monitorar")), key=f"{prefixo}p_{lid}_{fid}")
+        nprazo = st.selectbox("PRAZO / SLA", ["Imediato (0–24h)", "Urgente (até 7 dias)", "Planejado (até 30 dias)", "Monitorar"], index=["Imediato (0–24h)", "Urgente (até 7 dias)", "Planejado (até 30 dias)", "Monitorar"].index(f.get("prazo_correcao", "Monitorar")), key=f"{prefixo}p_{lid}_{fid}")
+        st.markdown(_sla_badge_html(nprazo), unsafe_allow_html=True)
         
         st.markdown("**🔧 Materiais necessários**")
         emat_key = f"emats_{prefixo}_{lid}_{fid}"
@@ -1071,6 +1124,43 @@ def tela_dashboard():
     m3.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{df_filtrado["qtd_fotos"].sum()}</div><div class="eng-metric-label">EVIDÊNCIAS</div></div>', unsafe_allow_html=True)
     m4.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{df_filtrado["qtd_extras"].sum()}</div><div class="eng-metric-label">ANEXOS</div></div>', unsafe_allow_html=True)
 
+    # ── Tabela rápida de laudos com Destacar ──────────────────────────────
+    st.markdown("<br>", unsafe_allow_html=True)
+    with st.expander("📋 Ver todos os laudos — selecionar para destacar", expanded=False):
+        rows_resumo = ""
+        for _, r_res in df_filtrado.iterrows():
+            fotos_res  = json.loads(r_res['fotos_json'] or '[]')
+            n_crit_res = sum(1 for f in fotos_res if {'Crítico':'Critico','Observação':'Observacao'}.get(f.get('severidade','Normal'),f.get('severidade','Normal')) == 'Critico')
+            prazo_res  = next((f.get('prazo_correcao','Monitorar') for f in fotos_res), 'Monitorar')
+            m_res      = _SLA_META.get(prazo_res, _SLA_META["Monitorar"])
+            cor_crit   = "#DA291C" if n_crit_res > 0 else "#16A34A"
+            btn_res    = _btn_destaque_js(str(r_res['site_id']), prazo_res)
+            rows_resumo += (
+                f"<tr>"
+                f"<td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-weight:700;'>{sanitizar(str(r_res['site_id']))}</td>"
+                f"<td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'>{sanitizar(str(r_res.get('tecnico','') or r_res.get('contato','—')))}</td>"
+                f"<td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;color:#64748B;'>{sanitizar(str(r_res.get('data_hora','—')))}</td>"
+                f"<td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:center;'>{len(fotos_res)}</td>"
+                f"<td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:center;font-weight:700;color:{cor_crit};'>{n_crit_res}</td>"
+                f"<td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;color:{m_res['cor']};font-weight:600;'>{m_res['icone']} {sanitizar(prazo_res)}</td>"
+                f"<td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'>{btn_res}</td>"
+                f"</tr>"
+            )
+        st.markdown(
+            f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #e2e8f0;'>"
+            f"<table style='width:100%;border-collapse:collapse;font-size:12px;'>"
+            f"<thead><tr style='background:#002060;color:#fff;'>"
+            f"<th style='padding:8px 10px;text-align:left;'>Site</th>"
+            f"<th style='padding:8px 10px;text-align:left;'>Técnico</th>"
+            f"<th style='padding:8px 10px;text-align:left;'>Data</th>"
+            f"<th style='padding:8px 10px;text-align:center;'>Evidências</th>"
+            f"<th style='padding:8px 10px;text-align:center;'>Críticos</th>"
+            f"<th style='padding:8px 10px;text-align:left;'>SLA</th>"
+            f"<th style='padding:8px 10px;text-align:left;'>Ação</th>"
+            f"</tr></thead><tbody>{rows_resumo}</tbody></table></div>",
+            unsafe_allow_html=True
+        )
+
     st.markdown("---")
     
     col_chart1, col_chart2 = st.columns(2)
@@ -1079,10 +1169,31 @@ def tela_dashboard():
         secao("📈", "PRODUTIVIDADE (TOP SITES)")
         df_agrupado = df_filtrado.groupby("site_id")['total_imagens'].sum().reset_index().sort_values("total_imagens", ascending=False).head(10)
         if not df_agrupado.empty:
-            fig_bar = px.bar(df_agrupado, x="site_id", y="total_imagens", text="total_imagens", color="total_imagens", 
+            fig_bar = px.bar(df_agrupado, x="site_id", y="total_imagens", text="total_imagens", color="total_imagens",
                              color_continuous_scale=px.colors.sequential.Reds, labels={"site_id": "Site", "total_imagens": "Total de Imagens"})
             fig_bar.update_layout(margin=dict(l=0, r=0, t=30, b=0), showlegend=False)
             st.plotly_chart(fig_bar, use_container_width=True)
+            # ── Tabela de sites com botão Destacar ──
+            rows_prod = ""
+            for _, rp in df_agrupado.iterrows():
+                btn_p = _btn_destaque_js(str(rp['site_id']))
+                rows_prod += (
+                    f"<tr>"
+                    f"<td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-weight:600;'>{sanitizar(str(rp['site_id']))}</td>"
+                    f"<td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:center;'>{int(rp['total_imagens'])}</td>"
+                    f"<td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'>{btn_p}</td>"
+                    f"</tr>"
+                )
+            st.markdown(
+                f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #e2e8f0;margin-top:8px;'>"
+                f"<table style='width:100%;border-collapse:collapse;font-size:12px;'>"
+                f"<thead><tr style='background:#002060;color:#fff;'>"
+                f"<th style='padding:7px 10px;text-align:left;'>Site</th>"
+                f"<th style='padding:7px 10px;text-align:center;'>Evidências</th>"
+                f"<th style='padding:7px 10px;text-align:left;'>Ação</th>"
+                f"</tr></thead><tbody>{rows_prod}</tbody></table></div>",
+                unsafe_allow_html=True
+            )
 
     with col_chart2:
         secao("🚨", "DISTRIBUIÇÃO DE SEVERIDADE")
@@ -1104,7 +1215,96 @@ def tela_dashboard():
             st.info("Sem dados de severidade para exibir.")
 
     st.markdown("---")
-    
+    secao("⏱️", "PAINEL SLA — CONTROLE DE PRAZOS DE CORREÇÃO")
+
+    _prazos_ord = ["Imediato (0–24h)", "Urgente (até 7 dias)", "Planejado (até 30 dias)", "Monitorar"]
+    sla_contagem = {p: 0 for p in _prazos_ord}
+    sla_itens    = []
+    for _, r_sla in df_filtrado.iterrows():
+        for f_sla in json.loads(r_sla['fotos_json'] or '[]'):
+            prazo_sla = f_sla.get('prazo_correcao', 'Monitorar')
+            sla_contagem[prazo_sla] = sla_contagem.get(prazo_sla, 0) + 1
+            sla_itens.append({
+                'Site':      r_sla['site_id'],
+                'Técnico':   r_sla.get('tecnico', '—'),
+                'Data':      r_sla.get('data_hora','—'),
+                'Evidência': f_sla.get('titulo','—'),
+                'Severidade':f_sla.get('severidade','Normal'),
+                'Prazo':     prazo_sla,
+            })
+
+    sc1, sc2, sc3, sc4 = st.columns(4)
+    for col_sla, prazo_sla in zip([sc1, sc2, sc3, sc4], _prazos_ord):
+        m = _SLA_META[prazo_sla]
+        cnt = sla_contagem.get(prazo_sla, 0)
+        kpi_cls = _SLA_KPI_CLS[prazo_sla]
+        kpi_cor = _SLA_KPI_COR[prazo_sla]
+        col_sla.markdown(
+            f'<div class="sla-kpi {kpi_cls}">'
+            f'<div class="sla-kpi-val" style="color:{kpi_cor};">{m["icone"]} {cnt}</div>'
+            f'<div class="sla-kpi-lbl" style="color:{kpi_cor};">{prazo_sla}</div>'
+            f'</div>', unsafe_allow_html=True
+        )
+
+    if sla_contagem.get("Imediato (0–24h)", 0) > 0:
+        st.markdown(
+            f'<div class="sla-box sla-imediato" style="margin-top:12px;">'
+            f'⚠️ ATENÇÃO: {sla_contagem["Imediato (0–24h)"]} evidência(s) com SLA IMEDIATO (0–24h) requerem ação urgente!'
+            f'</div>', unsafe_allow_html=True
+        )
+
+    if sla_itens:
+        df_sla = pd.DataFrame(sla_itens)
+        st.markdown("<br>", unsafe_allow_html=True)
+        col_filtro_sla, _ = st.columns([1, 2])
+        with col_filtro_sla:
+            sla_filtro_sel = st.selectbox(
+                "Filtrar por prazo:",
+                ["Todos"] + _prazos_ord,
+                key="dash_sla_filtro"
+            )
+        df_sla_view = df_sla if sla_filtro_sel == "Todos" else df_sla[df_sla['Prazo'] == sla_filtro_sel]
+
+        # Destaque de linha por SLA via HTML
+        sla_cor_linha = {
+            "Imediato (0–24h)":       "#fff1f0",
+            "Urgente (até 7 dias)":   "#fff7ed",
+            "Planejado (até 30 dias)":"#eff6ff",
+            "Monitorar":              "#f8fafc",
+        }
+        rows_html = ""
+        for _, r_html in df_sla_view.iterrows():
+            bg = sla_cor_linha.get(r_html['Prazo'], "#fff")
+            m_html = _SLA_META.get(r_html['Prazo'], _SLA_META["Monitorar"])
+            sev_html = sanitizar(str(r_html['Severidade']))
+            btn_dest = _btn_destaque_js(str(r_html['Site']), str(r_html['Prazo']), str(r_html['Evidência']))
+            rows_html += (
+                f"<tr style='background:{bg};'>"
+                f"<td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;font-weight:600;'>{sanitizar(str(r_html['Site']))}</td>"
+                f"<td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;'>{sanitizar(str(r_html['Evidência']))}</td>"
+                f"<td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;'>{sanitizar(str(r_html['Técnico']))}</td>"
+                f"<td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;color:#64748B;'>{sanitizar(str(r_html['Data']))}</td>"
+                f"<td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;'>{sev_html}</td>"
+                f"<td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;font-weight:700;color:{m_html['cor']};'>{m_html['icone']} {sanitizar(str(r_html['Prazo']))}</td>"
+                f"<td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;'>{btn_dest}</td>"
+                f"</tr>"
+            )
+        st.markdown(
+            f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #e2e8f0;'>"
+            f"<table style='width:100%;border-collapse:collapse;font-size:13px;'>"
+            f"<thead><tr style='background:#002060;color:#fff;'>"
+            f"<th style='padding:8px 10px;text-align:left;'>Site</th>"
+            f"<th style='padding:8px 10px;text-align:left;'>Evidência</th>"
+            f"<th style='padding:8px 10px;text-align:left;'>Técnico</th>"
+            f"<th style='padding:8px 10px;text-align:left;'>Data</th>"
+            f"<th style='padding:8px 10px;text-align:left;'>Severidade</th>"
+            f"<th style='padding:8px 10px;text-align:left;'>SLA / Prazo</th>"
+            f"<th style='padding:8px 10px;text-align:left;'>Ação</th>"
+            f"</tr></thead><tbody>{rows_html}</tbody></table></div>",
+            unsafe_allow_html=True
+        )
+
+    st.markdown("---")
     secao("🌍", "MAPA TÁTICO DE VISTORIAS (GEOLOCALIZAÇÃO)")
     col_st1, col_st2 = st.columns([2, 1])
     with col_st1:
@@ -1241,11 +1441,64 @@ def tela_dashboard():
         oc4.markdown(f'<div class="eng-metric"><div class="eng-metric-val" style="color:#D97706;">{total_semcusto}</div><div class="eng-metric-label">SEM CUSTO INFORMADO</div></div>', unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
+        col_filtro_orc, _ = st.columns([1, 2])
+        with col_filtro_orc:
+            sev_filtro_orc = st.selectbox("Filtrar por severidade:", ["Todas","Critico","Observacao","Normal"], key="orc_sev_filtro")
+
         df_orc_view = df_orc.copy()
-        df_orc_view['Qtd'] = df_orc_view['Qtd'].apply(lambda x: f"{x:.0f}")
-        df_orc_view['Unit_R$']  = df_orc_view['Unit_R$'].apply(lambda x: f"R$ {x:,.2f}")
-        df_orc_view['Total_R$'] = df_orc_view['Total_R$'].apply(lambda x: f"R$ {x:,.2f}")
-        st.dataframe(df_orc_view, hide_index=True, use_container_width=True)
+        if sev_filtro_orc != "Todas":
+            df_orc_view = df_orc_view[df_orc_view['Severidade'].str.replace('í','i').str.replace('ã','a') == sev_filtro_orc]
+
+        _sev_cor_orc = {"Critico":"#DA291C","Crítico":"#DA291C","Observacao":"#D97706","Observação":"#D97706"}
+        rows_orc_html = ""
+        for _, r_orc in df_orc_view.iterrows():
+            cor_sev_orc = _sev_cor_orc.get(str(r_orc['Severidade']), "#16A34A")
+            m_orc       = _SLA_META.get(str(r_orc['Prazo']), _SLA_META["Monitorar"])
+            btn_orc     = _btn_destaque_js(str(r_orc['Site']), str(r_orc['Prazo']), str(r_orc['Evidência']))
+            rows_orc_html += (
+                f"<tr>"
+                f"<td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-weight:600;'>{sanitizar(str(r_orc['Site']))}</td>"
+                f"<td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'>{sanitizar(str(r_orc['Evidência']))}</td>"
+                f"<td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-weight:600;color:{cor_sev_orc};'>{sanitizar(str(r_orc['Severidade']))}</td>"
+                f"<td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;color:{m_orc['cor']};font-weight:600;'>{m_orc['icone']} {sanitizar(str(r_orc['Prazo']))}</td>"
+                f"<td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'>{sanitizar(str(r_orc['Material']))}</td>"
+                f"<td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:center;'>{sanitizar(str(r_orc['Unidade']))}</td>"
+                f"<td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:center;'>{int(r_orc['Qtd'])}</td>"
+                f"<td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:right;'>R$ {r_orc['Unit_R$']:,.2f}</td>"
+                f"<td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:700;'>R$ {r_orc['Total_R$']:,.2f}</td>"
+                f"<td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'>{btn_orc}</td>"
+                f"</tr>"
+            )
+        st.markdown(
+            f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #e2e8f0;'>"
+            f"<table style='width:100%;border-collapse:collapse;font-size:12px;'>"
+            f"<thead><tr style='background:#002060;color:#fff;'>"
+            f"<th style='padding:8px 10px;text-align:left;'>Site</th>"
+            f"<th style='padding:8px 10px;text-align:left;'>Evidência</th>"
+            f"<th style='padding:8px 10px;text-align:left;'>Severidade</th>"
+            f"<th style='padding:8px 10px;text-align:left;'>SLA</th>"
+            f"<th style='padding:8px 10px;text-align:left;'>Material</th>"
+            f"<th style='padding:8px 10px;text-align:center;'>Un.</th>"
+            f"<th style='padding:8px 10px;text-align:center;'>Qtd.</th>"
+            f"<th style='padding:8px 10px;text-align:right;'>Unit. R$</th>"
+            f"<th style='padding:8px 10px;text-align:right;'>Total R$</th>"
+            f"<th style='padding:8px 10px;text-align:left;'>Ação</th>"
+            f"</tr></thead><tbody>{rows_orc_html}</tbody></table></div>",
+            unsafe_allow_html=True
+        )
+        if total_semcusto > 0:
+            st.caption(f"⚠️ {total_semcusto} item(ns) sem custo unitário informado — total estimado pode estar incompleto.")
+
+        buf_orc = io.BytesIO()
+        with pd.ExcelWriter(buf_orc, engine='openpyxl') as writer:
+            df_orc.to_excel(writer, index=False, sheet_name='Orçamento')
+        st.download_button(
+            label="📥 Exportar Orçamento Excel",
+            data=buf_orc.getvalue(),
+            file_name=f"Orcamento_{datetime.now().strftime('%Y%m%d%H%M%S')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=False
+        )
 
     st.markdown("---")
     secao("🛡️", "LOG DE AUDITORIA (LGPD)")
@@ -1519,6 +1772,143 @@ def _css_rota_pdf() -> str:
     .foto-thumb {{ width: 80px; height: 60px; object-fit: cover; border-radius: 3px; }}
     """
 
+# ==============================================================================
+# PAINEL SLA — TELA DEDICADA RESPONSIVA (MOBILE / TV)
+# ==============================================================================
+def tela_painel_sla():
+    st.markdown("""
+    <style>
+    [data-testid="stSidebar"] { display: none !important; }
+    [data-testid="stHeader"]  { display: none !important; }
+    .block-container { padding: 1rem 1rem 2rem !important; max-width: 100% !important; }
+    .sla-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+    .sla-card { border-radius: 12px; padding: 16px; border-left: 6px solid; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.07); display: flex; flex-direction: column; gap: 6px; }
+    .sla-card-imediato  { border-color: #DA291C; background: #fff5f5; }
+    .sla-card-urgente   { border-color: #ea580c; background: #fff8f3; }
+    .sla-card-planejado { border-color: #2563eb; background: #f0f6ff; }
+    .sla-card-monitorar { border-color: #94a3b8; background: #f8fafc; }
+    .sla-card-site   { font-size: 11px; font-weight: 700; text-transform: uppercase; color: #64748B; }
+    .sla-card-titulo { font-size: 15px; font-weight: 700; color: #1e293b; line-height: 1.3; }
+    .sla-card-desc   { font-size: 12px; color: #475569; }
+    .sla-card-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; flex-wrap: wrap; gap: 4px; }
+    .sla-pill { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+    .pill-imediato  { background:#fecaca; color:#7f1d1d; }
+    .pill-urgente   { background:#fed7aa; color:#7c2d12; }
+    .pill-planejado { background:#bfdbfe; color:#1e3a8a; }
+    .pill-monitorar { background:#e2e8f0; color:#475569; }
+    .pill-critico   { background:#fecaca; color:#7f1d1d; }
+    .pill-observacao{ background:#fde68a; color:#78350f; }
+    .pill-normal    { background:#bbf7d0; color:#14532d; }
+    .painel-header  { background:#002060; color:#fff; border-radius:10px; padding:14px 20px; display:flex; justify-content:space-between; align-items:center; margin-bottom:18px; flex-wrap:wrap; gap:8px; }
+    .painel-header h2 { font-size: clamp(15px, 3vw, 22px); font-weight: 800; margin: 0; }
+    .painel-header span { font-size: 12px; opacity: .8; }
+    @media (max-width: 600px) { .sla-card-grid { grid-template-columns: 1fr; } }
+    </style>
+    """, unsafe_allow_html=True)
+
+    with sqlite3.connect(DB_NAME) as conn:
+        df_sla_all = pd.read_sql_query("SELECT * FROM relatorios ORDER BY id DESC", conn)
+
+    if df_sla_all.empty:
+        st.info("Nenhum relatório cadastrado.")
+        return
+
+    _prazos_ord = ["Imediato (0–24h)", "Urgente (até 7 dias)", "Planejado (até 30 dias)", "Monitorar"]
+
+    col_f1, col_f2, col_f3 = st.columns([1.5, 1.5, 1])
+    with col_f1:
+        prazo_sel = st.selectbox("SLA / Prazo:", ["Todos"] + _prazos_ord, key="sla_painel_prazo")
+    with col_f2:
+        sev_sel = st.selectbox("Severidade:", ["Todas", "Critico", "Observacao", "Normal"], key="sla_painel_sev")
+    with col_f3:
+        auto_refresh = st.checkbox("🔄 Auto-refresh (30s)", key="sla_auto_refresh")
+
+    itens_sla = []
+    for _, r_row in df_sla_all.iterrows():
+        for f_item in json.loads(r_row['fotos_json'] or '[]'):
+            prazo_item = f_item.get('prazo_correcao', 'Monitorar')
+            sev_item   = f_item.get('severidade', 'Normal')
+            sev_norm   = {'Crítico':'Critico','Observação':'Observacao'}.get(sev_item, sev_item)
+            if (prazo_sel == "Todos" or prazo_item == prazo_sel) and \
+               (sev_sel   == "Todas" or sev_norm  == sev_sel):
+                itens_sla.append({
+                    "prazo": prazo_item, "sev": sev_item, "sev_norm": sev_norm,
+                    "site":  r_row['site_id'],
+                    "tecnico": r_row.get('tecnico') or r_row.get('contato','—'),
+                    "data":  r_row.get('data_hora','—'),
+                    "titulo": f_item.get('titulo','Sem título'),
+                    "desc":  f_item.get('comentarios',''),
+                })
+
+    n_imediatos = sum(1 for i in itens_sla if i['prazo'] == "Imediato (0–24h)")
+    alerta_str  = f"⚠️ {n_imediatos} IMEDIATO(S)" if n_imediatos > 0 else "✅ Sem pendências imediatas"
+    st.markdown(
+        f'<div class="painel-header"><h2>⏱️ PAINEL SLA — CONTROLE DE PRAZOS</h2>'
+        f'<span>{alerta_str} &nbsp;|&nbsp; {len(itens_sla)} evidência(s) &nbsp;|&nbsp; {datetime.now().strftime("%d/%m/%Y %H:%M")}</span></div>',
+        unsafe_allow_html=True
+    )
+
+    kpi_cols = st.columns(4)
+    for col_k, prazo_k in zip(kpi_cols, _prazos_ord):
+        cnt_k   = sum(1 for i in itens_sla if i['prazo'] == prazo_k)
+        m_k     = _SLA_META[prazo_k]
+        kpi_cor = _SLA_KPI_COR[prazo_k]
+        kpi_cls = _SLA_KPI_CLS[prazo_k]
+        col_k.markdown(
+            f'<div class="sla-kpi {kpi_cls}" style="margin-bottom:12px;">'
+            f'<div class="sla-kpi-val" style="color:{kpi_cor};">{m_k["icone"]} {cnt_k}</div>'
+            f'<div class="sla-kpi-lbl" style="color:{kpi_cor};">{prazo_k}</div>'
+            f'</div>', unsafe_allow_html=True
+        )
+
+    if not itens_sla:
+        st.info("Nenhuma evidência para os filtros selecionados.")
+    else:
+        _prazo_cls = {
+            "Imediato (0–24h)":       ("sla-card-imediato","pill-imediato"),
+            "Urgente (até 7 dias)":   ("sla-card-urgente", "pill-urgente"),
+            "Planejado (até 30 dias)":("sla-card-planejado","pill-planejado"),
+            "Monitorar":              ("sla-card-monitorar","pill-monitorar"),
+        }
+        _sev_cls = {"Critico":"pill-critico","Observacao":"pill-observacao","Normal":"pill-normal"}
+        ordem_prazo = {p: i for i, p in enumerate(_prazos_ord)}
+        itens_sorted = sorted(itens_sla, key=lambda x: ordem_prazo.get(x['prazo'], 99))
+
+        cards_html = '<div class="sla-card-grid">'
+        for item in itens_sorted:
+            card_cls, pill_cls = _prazo_cls.get(item['prazo'], ("sla-card-monitorar","pill-monitorar"))
+            sev_pill = _sev_cls.get(item['sev_norm'], "pill-normal")
+            m_card   = _SLA_META.get(item['prazo'], _SLA_META["Monitorar"])
+            desc_t   = sanitizar(item['desc'][:120]) + ("…" if len(item['desc']) > 120 else "")
+            btn_d    = _btn_destaque_js(item['site'], item['prazo'], item['titulo'])
+            cards_html += (
+                f'<div class="sla-card {card_cls}">'
+                f'<div class="sla-card-site">📍 {sanitizar(item["site"])} · 👷 {sanitizar(str(item["tecnico"]))}</div>'
+                f'<div class="sla-card-titulo">{sanitizar(item["titulo"])}</div>'
+                f'<div class="sla-card-desc">{desc_t}</div>'
+                f'<div class="sla-card-footer">'
+                f'<span class="sla-pill {pill_cls}">{m_card["icone"]} {sanitizar(item["prazo"])}</span>'
+                f'<span class="sla-pill {sev_pill}">{sanitizar(item["sev"])}</span>'
+                f'<span style="font-size:11px;color:#94a3b8;">{sanitizar(str(item["data"]))}</span>'
+                f'{btn_d}'
+                f'</div></div>'
+            )
+        cards_html += '</div>'
+        st.markdown(cards_html, unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown(
+        '<a href="/" style="display:inline-flex;align-items:center;gap:6px;padding:8px 18px;'
+        'background:#002060;color:#fff;border-radius:8px;font-size:13px;font-weight:600;'
+        'text-decoration:none;margin-top:8px;">← Voltar ao menu principal</a>',
+        unsafe_allow_html=True
+    )
+    if auto_refresh:
+        import time
+        time.sleep(30)
+        st.rerun()
+
+
 def gerar_pdf_rota(rota_otimizada, distancia_km, duracao_seg, tecnico, evidencias_por_site) -> tuple[bytes, str]:
     densidade = len(rota_otimizada[1:]) / distancia_km if distancia_km > 0 else 0
     kpi_html = f"""
@@ -1714,6 +2104,129 @@ if not check_password():
 init_db()
 aplicar_estilo()
 
+# ── Interceptar modo destaque via query params ─────────────────────────────
+_qp = st.query_params
+if _qp.get("destaque"):
+    _site_d  = _qp.get("destaque", "")
+    _prazo_d = _qp.get("prazo", "")
+    _ev_d    = _qp.get("ev", "")   # título da evidência (opcional)
+
+    # CSS tela cheia — sem sidebar, sem header
+    st.markdown("""<style>
+    [data-testid="stSidebar"],[data-testid="stHeader"],[data-testid="stToolbar"]
+        { display:none !important; }
+    .block-container { padding:0 !important; max-width:100% !important; }
+    </style>""", unsafe_allow_html=True)
+
+    # Buscar dados atualizados do banco
+    with sqlite3.connect(DB_NAME) as _conn_d:
+        _rows_d = _conn_d.execute(
+            "SELECT * FROM relatorios WHERE TRIM(UPPER(site_id))=TRIM(UPPER(?)) ORDER BY id DESC LIMIT 1",
+            (_site_d,)
+        ).fetchone()
+        _cols_d = [d[0] for d in _conn_d.execute("SELECT * FROM relatorios LIMIT 0").description]
+
+    _m_d  = _SLA_META.get(_prazo_d, _SLA_META["Monitorar"])
+    _cor_d = _SLA_KPI_COR.get(_prazo_d, "#64748B")
+
+    _fotos_d = []
+    if _rows_d:
+        _row_dict = dict(zip(_cols_d, _rows_d))
+        _fotos_d  = json.loads(_row_dict.get('fotos_json') or '[]')
+        if _prazo_d:
+            _fotos_d = [f for f in _fotos_d if f.get('prazo_correcao','Monitorar') == _prazo_d]
+        if _ev_d:
+            _fotos_d = [f for f in _fotos_d if f.get('titulo','') == _ev_d] or _fotos_d
+
+    _n_ev_d = len(_fotos_d)
+
+    # Header do destaque
+    st.markdown(f"""
+    <div style="background:#002060;color:#fff;padding:20px 32px 16px;display:flex;
+        justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;min-height:80px;">
+      <div>
+        <div style="font-size:clamp(22px,4vw,40px);font-weight:900;letter-spacing:1px;">
+          {_m_d['icone']} {sanitizar(_site_d)}
+        </div>
+        <div style="font-size:clamp(13px,2vw,18px);opacity:.8;margin-top:4px;">
+          SLA: <strong style="color:{_cor_d};">{sanitizar(_prazo_d or 'Todos')}</strong>
+          &nbsp;·&nbsp; {_n_ev_d} evidência(s)
+          &nbsp;·&nbsp; Atualizado: {datetime.now().strftime('%H:%M:%S')}
+        </div>
+      </div>
+      <div style="font-size:clamp(28px,5vw,52px);font-weight:900;color:{_cor_d};">
+        {_m_d['icone']}
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if not _fotos_d:
+        st.markdown(f"""
+        <div style="display:flex;align-items:center;justify-content:center;height:60vh;
+            font-size:clamp(18px,3vw,32px);color:#94a3b8;flex-direction:column;gap:16px;">
+          <div>📭</div>
+          <div>Nenhuma evidência encontrada para<br><strong>{sanitizar(_site_d)}</strong></div>
+        </div>""", unsafe_allow_html=True)
+    else:
+        _prazo_bg = {
+            "Imediato (0–24h)":       "#fff1f0",
+            "Urgente (até 7 dias)":   "#fff7ed",
+            "Planejado (até 30 dias)":"#eff6ff",
+            "Monitorar":              "#f8fafc",
+        }
+        _sev_cor = {"Critico":"#DA291C","Crítico":"#DA291C","Observacao":"#D97706","Observação":"#D97706"}
+
+        for _f_d in _fotos_d:
+            _sev_f   = _f_d.get('severidade','Normal')
+            _cor_sev = _sev_cor.get(_sev_f, "#16A34A")
+            _bg_card = _prazo_bg.get(_f_d.get('prazo_correcao','Monitorar'), "#f8fafc")
+            _mats_f  = _f_d.get('materiais') or []
+            _mat_str = ", ".join(m.get('descricao','') for m in _mats_f if m.get('descricao','').strip()) or "—"
+
+            _col_img_d, _col_info_d = st.columns([1, 2])
+            _b64_d = _obter_b64_de_foto(_f_d)
+            if _b64_d:
+                _col_img_d.markdown(
+                    f'<img src="data:image/jpeg;base64,{_b64_d}" '
+                    f'style="width:100%;border-radius:10px;border:4px solid {_cor_sev};'
+                    f'box-shadow:0 4px 20px rgba(0,0,0,.18);" />',
+                    unsafe_allow_html=True
+                )
+
+            with _col_info_d:
+                st.markdown(f"""
+                <div style="background:{_bg_card};border-left:8px solid {_cor_sev};
+                    border-radius:10px;padding:clamp(16px,2vw,28px);height:100%;">
+                  <div style="font-size:clamp(18px,3vw,30px);font-weight:800;color:#1e293b;margin-bottom:10px;">
+                    {sanitizar(_f_d.get('titulo','Evidência'))}
+                  </div>
+                  <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+                    <span style="background:{_cor_sev};color:#fff;padding:4px 14px;
+                        border-radius:20px;font-size:clamp(12px,1.5vw,16px);font-weight:700;">
+                      {sanitizar(_sev_f)}
+                    </span>
+                    <span style="background:{_cor_d};color:#fff;padding:4px 14px;
+                        border-radius:20px;font-size:clamp(12px,1.5vw,16px);font-weight:700;">
+                      {_m_d['icone']} {sanitizar(_f_d.get('prazo_correcao','Monitorar'))}
+                    </span>
+                  </div>
+                  <div style="font-size:clamp(14px,2vw,20px);color:#334155;line-height:1.6;margin-bottom:14px;">
+                    {sanitizar(_f_d.get('comentarios',''))}
+                  </div>
+                  <div style="font-size:clamp(12px,1.5vw,16px);color:#DA291C;font-weight:600;">
+                    🔧 Material: {sanitizar(_mat_str)}
+                  </div>
+                </div>""", unsafe_allow_html=True)
+
+            st.markdown("<hr style='margin:20px 0;border-color:#e2e8f0;'>", unsafe_allow_html=True)
+
+    # Auto-refresh a cada 30s
+    st.markdown("""
+    <script>setTimeout(()=>location.reload(), 30000);</script>
+    """, unsafe_allow_html=True)
+    st.stop()
+
+# ── Roteamento normal ──────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("""
     <div style="text-align:center;padding:20px 0 10px 0;">
@@ -1725,9 +2238,10 @@ with st.sidebar:
     tec = st.text_input("👷 TÉCNICO EM CAMPO:", value=st.session_state.get("_tecnico_global", ""), placeholder="Seu nome", key="_tec_sidebar_rel")
     if tec.strip(): st.session_state["_tecnico_global"] = tec.strip()
     st.markdown("---")
-    menu = st.radio("NAVEGAÇÃO:", ["📝 NOVO RELATÓRIO", "🔍 PESQUISAR E EXPORTAR", "📊 DASHBOARD", "🗺️ ROTEIRIZAÇÃO TÁTICA"], label_visibility="collapsed")
+    menu = st.radio("NAVEGAÇÃO:", ["📝 NOVO RELATÓRIO", "🔍 PESQUISAR E EXPORTAR", "📊 DASHBOARD", "🗺️ ROTEIRIZAÇÃO TÁTICA", "📺 PAINEL SLA"], label_visibility="collapsed")
 
 if menu == "📝 NOVO RELATÓRIO": tela_novo()
 elif menu == "🔍 PESQUISAR E EXPORTAR": tela_pesquisa()
 elif menu == "📊 DASHBOARD": tela_dashboard()
 elif menu == "🗺️ ROTEIRIZAÇÃO TÁTICA": tela_roteirizacao()
+elif menu == "📺 PAINEL SLA": tela_painel_sla()
