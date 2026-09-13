@@ -1,6 +1,6 @@
 """
 GIRCP — Gerador Inteligente de Relatórios e Controle Fotográfico
-| v3.7.2 (Sprints 1, 2, 3 + Ajustes Visuais de Layout PDF)
+| v3.7.2 (Sprints 1, 2, 3 + Ajustes Visuais de Layout PDF + SecOps)
 """
 
 import streamlit as st
@@ -20,6 +20,8 @@ import pydeck as pdk
 import xml.etree.ElementTree as ET
 import filetype
 import qrcode
+import threading
+import subprocess
 from datetime import datetime, timedelta
 from PIL import Image
 from weasyprint import HTML
@@ -28,8 +30,20 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
 # ==============================================================================
-# 0. CONTROLE DE ACESSO E SEGURANÇA (LGPD)
+# 0. CONTROLE DE ACESSO E SEGURANÇA (LGPD & ANTI-MALWARE)
 # ==============================================================================
+def scan_malware_async(file_path: str):
+    """Executa varredura assíncrona com ClamAV. Se detectar ameaça, deleta silenciosamente."""
+    def _scan():
+        try:
+            res = subprocess.run(['clamdscan', '--fdpass', file_path], capture_output=True, text=True)
+            if res.returncode != 0:
+                os.remove(file_path)
+                registrar_auditoria("seguranca_malware_bloqueado", detalhe=f"Arquivo suspeito deletado: {file_path}")
+        except Exception:
+            pass
+    threading.Thread(target=_scan, daemon=True).start()
+
 def check_password():
     if "tentativas" not in st.session_state:
         st.session_state["tentativas"] = 0
@@ -44,16 +58,24 @@ def check_password():
             st.session_state["tentativas"] = 0
 
     def password_entered():
-        senha_correta = st.secrets.get("senha_acesso", "GIRCP2026")
+        try:
+            senha_correta = st.secrets["senha_acesso"]
+        except Exception:
+            st.error("🔒 Erro de infraestrutura: Credencial 'senha_acesso' não configurada no st.secrets. Acesso negado.")
+            st.session_state["password_correct"] = False
+            return
+
         if hmac.compare_digest(st.session_state["password_input"].encode(), senha_correta.encode()):
             st.session_state["password_correct"] = True
             del st.session_state["password_input"]
             st.session_state["tentativas"] = 0
+            registrar_auditoria("login_sucesso", detalhe="Autenticação válida")
         else:
             st.session_state["password_correct"] = False
             st.session_state["tentativas"] += 1
             if st.session_state["tentativas"] >= 5:
                 st.session_state["bloqueado_ate"] = datetime.now() + timedelta(minutes=5)
+                registrar_auditoria("bloqueio_bruteforce", detalhe="Múltiplas falhas de login")
 
     if st.session_state.get("password_correct", False):
         return True
@@ -491,8 +513,9 @@ def _carregar_base_dados(arquivo):
     try:
         if arquivo.name.lower().endswith('.kml'): return _parse_kml_to_dataframe(arquivo)
         else: return pd.read_excel(arquivo)
-    except Exception as e:
-        st.error(f"Erro ao processar a base: {e}")
+    except Exception:
+        st.error("⚠️ Erro estrutural ao processar a base de dados. Verifique se o arquivo segue o formato aceito.")
+        registrar_auditoria("erro_importacao_base", detalhe="Falha no parser Excel/KML")
         return None
 
 def _obter_filtros_cascata(df_sites):
@@ -566,7 +589,6 @@ def _sla_badge_html(prazo: str) -> str:
     return f'<div class="sla-box {m["cls"]}">{m["icone"]} SLA: {sanitizar(prazo)}</div>'
 
 def _btn_destaque_js(site_id: str, prazo: str = "", ev: str = "") -> str:
-    """Retorna HTML de botão que abre a tela de destaque em nova aba."""
     import urllib.parse
     params = {"destaque": site_id}
     if prazo: params["prazo"] = prazo
@@ -660,7 +682,7 @@ def tela_novo():
             
             tipo_real = filetype.guess(raw)
             if not tipo_real or tipo_real.extension not in ('jpg', 'jpeg', 'png', 'gif', 'webp'):
-                st.error(f"Arquivo '{arquivo.name}' não é imagem. Upload rejeitado.")
+                st.error(f"Arquivo '{arquivo.name}' não é imagem. Upload rejeitado por segurança.")
                 continue
 
             raw_comp = comprimir_para_pdf(raw)
@@ -669,6 +691,7 @@ def tela_novo():
             
             caminho_foto = os.path.join(FOTOS_DIR, f"ev_{foto_id}.jpg")
             with open(caminho_foto, "wb") as f_out: f_out.write(raw_comp)
+            scan_malware_async(caminho_foto)
 
             st.markdown("---")
             c_img, c_dados = st.columns([1, 3])
@@ -719,7 +742,7 @@ def tela_novo():
             raw_ex = arq_ex.getvalue()
             tipo_real = filetype.guess(raw_ex)
             if not tipo_real or tipo_real.extension not in ('jpg', 'jpeg', 'png', 'gif', 'webp'):
-                st.error(f"Arquivo '{arq_ex.name}' não é imagem. Upload rejeitado.")
+                st.error(f"Arquivo '{arq_ex.name}' não é imagem. Upload rejeitado por segurança.")
                 continue
 
             raw_comp_ex = comprimir_para_pdf(raw_ex)
@@ -727,6 +750,7 @@ def tela_novo():
             
             caminho_extra = os.path.join(FOTOS_DIR, f"ex_{fid_ex}.jpg")
             with open(caminho_extra, "wb") as f_out_ex: f_out_ex.write(raw_comp_ex)
+            scan_malware_async(caminho_extra)
             
             c_img_ex, c_dados_ex = st.columns([1, 3])
             with c_img_ex: st.image(arq_ex, use_container_width=True)
@@ -924,13 +948,14 @@ def _render_novas_fotos(lid, db_existentes):
             raw = a.getvalue()
             tipo_real = filetype.guess(raw)
             if not tipo_real or tipo_real.extension not in ('jpg', 'jpeg', 'png', 'gif', 'webp'):
-                st.error(f"Arquivo '{a.name}' não é imagem. Upload rejeitado.")
+                st.error(f"Arquivo '{a.name}' não é imagem. Upload rejeitado por segurança.")
                 continue
 
             raw_comp = comprimir_para_pdf(raw)
             fid = hashlib.sha256(raw).hexdigest()[:16]
             caminho_foto = os.path.join(FOTOS_DIR, f"new_{lid}_{fid}.jpg")
             with open(caminho_foto, "wb") as f_out: f_out.write(raw_comp)
+            scan_malware_async(caminho_foto)
                 
             col_i, col_d = st.columns([1, 4])
             with col_i: st.image(a, width=90); st.caption(f"ID: {sanitizar(fid)}")
@@ -1907,7 +1932,6 @@ def tela_painel_sla():
         import time
         time.sleep(30)
         st.rerun()
-
 
 def gerar_pdf_rota(rota_otimizada, distancia_km, duracao_seg, tecnico, evidencias_por_site) -> tuple[bytes, str]:
     densidade = len(rota_otimizada[1:]) / distancia_km if distancia_km > 0 else 0
