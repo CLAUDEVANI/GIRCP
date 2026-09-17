@@ -22,6 +22,7 @@ import filetype
 import qrcode
 import threading
 import subprocess
+import urllib.parse
 from datetime import datetime, timedelta
 from PIL import Image
 from weasyprint import HTML
@@ -33,13 +34,24 @@ from openpyxl.utils import get_column_letter
 # 0. CONTROLE DE ACESSO E SEGURANÇA (LGPD & ANTI-MALWARE)
 # ==============================================================================
 def scan_malware_async(file_path: str):
-    """Executa varredura assíncrona com ClamAV. Se detectar ameaça, deleta silenciosamente."""
+    """
+    Executa varredura assíncrona com ClamAV.
+    Se detectar ameaça: deleta o arquivo e marca um flag no session_state
+    para que o próximo rerun exiba aviso ao usuário.
+    """
     def _scan():
         try:
             res = subprocess.run(['clamdscan', '--fdpass', file_path], capture_output=True, text=True)
             if res.returncode != 0:
-                os.remove(file_path)
+                try:
+                    os.remove(file_path)
+                except OSError:
+                    pass
                 registrar_auditoria("seguranca_malware_bloqueado", detalhe=f"Arquivo suspeito deletado: {file_path}")
+                # Sinaliza para o próximo rerun exibir aviso — session_state é thread-safe para escrita simples
+                if "_malware_alertas" not in st.session_state:
+                    st.session_state["_malware_alertas"] = []
+                st.session_state["_malware_alertas"].append(os.path.basename(file_path))
         except Exception:
             pass
     threading.Thread(target=_scan, daemon=True).start()
@@ -166,6 +178,27 @@ def registrar_auditoria(acao: str, id_relatorio: int = None, detalhe: str = ""):
 def sanitizar(texto: str) -> str:
     return html_mod.escape(str(texto or '').strip())
 
+def _row_get(row, campo: str, default=""):
+    """Lê campo de sqlite3.Row com segurança, retornando default se ausente ou nulo."""
+    try:
+        val = row[campo]
+        return val if val is not None else default
+    except (IndexError, KeyError):
+        return default
+
+# Mapeamento canônico de severidade — elimina duplicação de dicts espalhados pelo código
+_SEV_CANONICAL: dict[str, str] = {"Crítico": "Critico", "Observação": "Observacao"}
+_SEV_COR: dict[str, str] = {
+    "Critico":   "#DA291C",
+    "Crítico":   "#DA291C",
+    "Observacao": "#D97706",
+    "Observação": "#D97706",
+}
+
+def normalizar_sev(s: str) -> str:
+    """Retorna a forma canônica sem acento: 'Crítico'→'Critico', 'Observação'→'Observacao'."""
+    return _SEV_CANONICAL.get(s, s)
+
 def comprimir_para_pdf(raw: bytes, max_px: int = 1200, qualidade: int = 78) -> bytes:
     img = Image.open(io.BytesIO(raw)).convert('RGB')
     img.thumbnail((max_px, max_px), Image.Resampling.LANCZOS)
@@ -174,8 +207,11 @@ def comprimir_para_pdf(raw: bytes, max_px: int = 1200, qualidade: int = 78) -> b
     return buf.getvalue()
 
 def proximo_numero_relatorio(conn) -> str:
-    conn.execute("UPDATE seq_relatorio SET ultimo = ultimo + 1")
-    ultimo = conn.execute("SELECT ultimo FROM seq_relatorio").fetchone()[0]
+    # Operação atômica: incrementa e lê em um único statement, evitando race condition
+    row = conn.execute(
+        "UPDATE seq_relatorio SET ultimo = ultimo + 1 RETURNING ultimo"
+    ).fetchone()
+    ultimo = row[0]
     return f"GIRCP-{datetime.now().year}-{ultimo:04d}"
 
 def _carregar_b64(caminho: str) -> str:
@@ -244,9 +280,17 @@ def _css_pdf() -> str:
     """
 
 def _obter_b64_de_foto(f: dict) -> str:
-    if "caminho" in f and os.path.exists(f["caminho"]):
-        with open(f["caminho"], "rb") as img_file:
+    """
+    Tenta carregar a foto do disco (caminho preferencial) e codifica em base64.
+    Se o arquivo físico não existir, cai no campo 'base64' inline como fallback
+    (compatibilidade com registros antigos que armazenavam base64 no JSON).
+    Registros futuros devem sempre usar 'caminho' — evite armazenar base64 no banco.
+    """
+    caminho = f.get("caminho", "")
+    if caminho and os.path.exists(caminho):
+        with open(caminho, "rb") as img_file:
             return base64.b64encode(img_file.read()).decode('utf-8')
+    # Fallback: base64 inline (legado) — não recomendado para novos registros
     return f.get('base64', '')
 
 def gerar_pdf(dados: dict, fotos: list, extras: list = None) -> tuple[bytes, str]:
@@ -259,8 +303,8 @@ def gerar_pdf(dados: dict, fotos: list, extras: list = None) -> tuple[bytes, str
     sig_img = f'<img class="assinatura-img" src="data:image/png;base64,{b64_sig}"/>' if b64_sig else '<div style="height:40px;"></div>'
     logo_img = f'<img class="logo-img" src="data:image/png;base64,{b64_logo}"/>' if b64_logo else ""
 
-    n_criticos = sum(1 for f in fotos if f.get('severidade','') in ('Critico','Crítico'))
-    n_obs      = sum(1 for f in fotos if f.get('severidade','') in ('Observacao','Observação'))
+    n_criticos = sum(1 for f in fotos if normalizar_sev(f.get('severidade','')) == 'Critico')
+    n_obs      = sum(1 for f in fotos if normalizar_sev(f.get('severidade','')) == 'Observacao')
     n_normal   = len(fotos) - n_criticos - n_obs
     all_mats   = [m for f in fotos for m in (f.get('materiais') or []) if m.get('descricao','').strip()]
     total_custo = sum(m.get('quantidade',0)*m.get('custo_unit',0) for m in all_mats)
@@ -292,11 +336,11 @@ def gerar_pdf(dados: dict, fotos: list, extras: list = None) -> tuple[bytes, str
         sev  = f.get('severidade', 'Normal')
         prazo = f.get('prazo_correcao', 'Monitorar')
         
-        cls_b = {'Crítico': 'badge-critico', 'Critico': 'badge-critico', 'Observação': 'badge-obs', 'Observacao': 'badge-obs'}.get(sev, 'badge-normal')
+        _cls_b_map = {'Critico': 'badge-critico', 'Observacao': 'badge-obs'}
+        sev_norm = normalizar_sev(sev)
+        cls_b = _cls_b_map.get(sev_norm, 'badge-normal')
         cls_p = {'Imediato (0–24h)': 'badge-prazo-imediato', 'Urgente (até 7 dias)': 'badge-prazo-urgente', 'Planejado (até 30 dias)': 'badge-prazo-planejado'}.get(prazo, 'badge-prazo-monitorar')
         cat  = sanitizar(f.get('categoria', 'Geral'))
-        
-        sev_norm = sev.replace('ã','a').replace('Ã','A')
         badge_html = f'<span class="badge {cls_b}">{sanitizar(sev)}</span> <span class="badge {cls_p}">{sanitizar(prazo)}</span>' if sev_norm not in ('Normal', '') else f'<span class="badge {cls_p}">{sanitizar(prazo)}</span>'
         
         mats_list = f.get('materiais') or []
@@ -408,41 +452,49 @@ def gerar_pdf(dados: dict, fotos: list, extras: list = None) -> tuple[bytes, str
 </body></html>"""
 
     nome = f"Relatorio_{sanitizar(dados.get('site_id','SITE')).replace(' ','_')}_{datetime.now().strftime('%Y%m%d%H%M%S')}.pdf"
-    
-    pdf_bytes_temp = HTML(string=html_raw.replace("HASH_PLACEHOLDER", "Gerando...")).write_pdf()
-    hash_doc = hashlib.sha256(pdf_bytes_temp).hexdigest()
-    
-    html_final = html_raw.replace("HASH_PLACEHOLDER", f"SHA-256: {hash_doc[:16]}")
-    pdf_bytes_final = HTML(string=html_final).write_pdf()
-    
+
+    # Gera o PDF uma única vez com placeholder temporário, calcula o hash do conteúdo,
+    # e substitui diretamente nos bytes do PDF (evita re-renderização completa com WeasyPrint).
+    html_com_placeholder = html_raw.replace("HASH_PLACEHOLDER", "Calculando...")
+    pdf_bytes = HTML(string=html_com_placeholder).write_pdf()
+    hash_doc = hashlib.sha256(pdf_bytes).hexdigest()
+    # Substitui a string do placeholder diretamente nos bytes sem re-renderizar
+    placeholder_bytes = b"Calculando..."
+    hash_bytes = f"SHA-256: {hash_doc[:16]}".encode()
+    pdf_bytes_final = pdf_bytes.replace(placeholder_bytes, hash_bytes, 1)
+
     return pdf_bytes_final, nome
 
+# CSS principal pré-computado uma única vez ao carregar o módulo.
+# Evita reconstrução da f-string a cada rerun do Streamlit.
+_CSS_GLOBAL: str = f"""<style>
+[data-testid="stAppViewContainer"] {{ background: #F8FAFC; }}
+[data-testid="stSidebar"] {{ background: {COR_AZUL} !important; }}
+[data-testid="stSidebar"] * {{ color: #fff !important; }}
+.eng-banner {{ background: linear-gradient(135deg, {COR_AZUL} 0%, {COR_AZUL_MED} 100%); color: #fff; padding: 20px 28px; border-radius: 10px; margin-bottom: 24px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 4px 16px rgba(0,32,96,0.18); }}
+.eng-banner-title {{ font-size: 22px; font-weight: 900; letter-spacing: 1.2px; text-transform: uppercase; }}
+.eng-banner-badge {{ background: {COR_VERMELHO}; color: #fff; padding: 5px 14px; border-radius: 20px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; }}
+.eng-section {{ background: {COR_AZUL}; color: #fff; padding: 10px 18px; border-radius: 6px; margin: 24px 0 14px 0; font-weight: 700; font-size: 13px; text-transform: uppercase; border-left: 5px solid {COR_VERMELHO}; }}
+.eng-metric {{ background: #fff; border: 1.5px solid {COR_BORDA}; border-radius: 8px; padding: 14px 10px; text-align: center; }}
+.eng-metric-val {{ font-size: 26px; font-weight: 900; color: {COR_AZUL}; line-height: 1.1; }}
+.eng-metric-label {{ font-size: 10px; color: {COR_CINZA}; text-transform: uppercase; margin-top: 4px; letter-spacing: 0.5px; }}
+.sla-box {{ border-radius: 8px; padding: 10px 14px; margin-top: 4px; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; }}
+.sla-imediato {{ background: #fff1f0; border: 2px solid #DA291C; color: #7f1d1d; animation: sla-pulse 1.4s infinite; }}
+.sla-urgente  {{ background: #fff7ed; border: 2px solid #ea580c; color: #7c2d12; }}
+.sla-planejado{{ background: #eff6ff; border: 2px solid #2563eb; color: #1e3a8a; }}
+.sla-monitorar{{ background: #f8fafc; border: 2px solid {COR_BORDA}; color: {COR_CINZA}; }}
+@keyframes sla-pulse {{ 0%,100%{{opacity:1}} 50%{{opacity:.55}} }}
+.sla-kpi {{ border-radius: 10px; padding: 16px 12px; text-align: center; border: 2px solid transparent; }}
+.sla-kpi-imediato {{ background:#fff1f0; border-color:#DA291C; }}
+.sla-kpi-urgente  {{ background:#fff7ed; border-color:#ea580c; }}
+.sla-kpi-planejado{{ background:#eff6ff; border-color:#2563eb; }}
+.sla-kpi-monitorar{{ background:#f8fafc; border-color:{COR_BORDA}; }}
+.sla-kpi-val {{ font-size: 28px; font-weight: 900; line-height: 1.1; }}
+.sla-kpi-lbl {{ font-size: 10px; text-transform: uppercase; margin-top: 4px; letter-spacing: .5px; }}
+</style>"""
+
 def aplicar_estilo():
-    st.markdown(f"""<style>
-    [data-testid="stAppViewContainer"] {{ background: #F8FAFC; }}
-    [data-testid="stSidebar"] {{ background: {COR_AZUL} !important; }}
-    [data-testid="stSidebar"] * {{ color: #fff !important; }}
-    .eng-banner {{ background: linear-gradient(135deg, {COR_AZUL} 0%, {COR_AZUL_MED} 100%); color: #fff; padding: 20px 28px; border-radius: 10px; margin-bottom: 24px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 4px 16px rgba(0,32,96,0.18); }}
-    .eng-banner-title {{ font-size: 22px; font-weight: 900; letter-spacing: 1.2px; text-transform: uppercase; }}
-    .eng-banner-badge {{ background: {COR_VERMELHO}; color: #fff; padding: 5px 14px; border-radius: 20px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; }}
-    .eng-section {{ background: {COR_AZUL}; color: #fff; padding: 10px 18px; border-radius: 6px; margin: 24px 0 14px 0; font-weight: 700; font-size: 13px; text-transform: uppercase; border-left: 5px solid {COR_VERMELHO}; }}
-    .eng-metric {{ background: #fff; border: 1.5px solid {COR_BORDA}; border-radius: 8px; padding: 14px 10px; text-align: center; }}
-    .eng-metric-val {{ font-size: 26px; font-weight: 900; color: {COR_AZUL}; line-height: 1.1; }}
-    .eng-metric-label {{ font-size: 10px; color: {COR_CINZA}; text-transform: uppercase; margin-top: 4px; letter-spacing: 0.5px; }}
-    .sla-box {{ border-radius: 8px; padding: 10px 14px; margin-top: 4px; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; }}
-    .sla-imediato {{ background: #fff1f0; border: 2px solid #DA291C; color: #7f1d1d; animation: sla-pulse 1.4s infinite; }}
-    .sla-urgente  {{ background: #fff7ed; border: 2px solid #ea580c; color: #7c2d12; }}
-    .sla-planejado{{ background: #eff6ff; border: 2px solid #2563eb; color: #1e3a8a; }}
-    .sla-monitorar{{ background: #f8fafc; border: 2px solid {COR_BORDA}; color: {COR_CINZA}; }}
-    @keyframes sla-pulse {{ 0%,100%{{opacity:1}} 50%{{opacity:.55}} }}
-    .sla-kpi {{ border-radius: 10px; padding: 16px 12px; text-align: center; border: 2px solid transparent; }}
-    .sla-kpi-imediato {{ background:#fff1f0; border-color:#DA291C; }}
-    .sla-kpi-urgente  {{ background:#fff7ed; border-color:#ea580c; }}
-    .sla-kpi-planejado{{ background:#eff6ff; border-color:#2563eb; }}
-    .sla-kpi-monitorar{{ background:#f8fafc; border-color:{COR_BORDA}; }}
-    .sla-kpi-val {{ font-size: 28px; font-weight: 900; line-height: 1.1; }}
-    .sla-kpi-lbl {{ font-size: 10px; text-transform: uppercase; margin-top: 4px; letter-spacing: .5px; }}
-    </style>""", unsafe_allow_html=True)
+    st.markdown(_CSS_GLOBAL, unsafe_allow_html=True)
 
 def banner(subtitulo: str = ""):
     subtitulo_seguro = sanitizar(subtitulo)
@@ -589,7 +641,6 @@ def _sla_badge_html(prazo: str) -> str:
     return f'<div class="sla-box {m["cls"]}">{m["icone"]} SLA: {sanitizar(prazo)}</div>'
 
 def _btn_destaque_js(site_id: str, prazo: str = "", ev: str = "") -> str:
-    import urllib.parse
     params = {"destaque": site_id}
     if prazo: params["prazo"] = prazo
     if ev:    params["ev"]    = ev
@@ -600,6 +651,53 @@ def _btn_destaque_js(site_id: str, prazo: str = "", ev: str = "") -> str:
         f'background:#002060;color:#fff;border-radius:6px;font-size:11px;font-weight:600;'
         f'text-decoration:none;cursor:pointer;" title="Destacar em nova tela">🖥️ Destacar</a>'
     )
+
+_UNIDADES_MAT = ["un", "m", "kg", "kit", "cx", "hr"]
+_MAT_VAZIO    = {"descricao": "", "unidade": "un", "quantidade": 1, "custo_unit": 0.0}
+
+def _widget_materiais(session_key: str, mats_default: list | None = None) -> list:
+    """
+    Renderiza o widget de materiais e retorna a lista atualizada.
+    Centraliza a lógica duplicada entre tela_novo() e _render_item_edicao().
+
+    Args:
+        session_key:  chave única no st.session_state para esta lista de materiais.
+        mats_default: lista inicial se o estado ainda não existir.
+    """
+    if session_key not in st.session_state:
+        st.session_state[session_key] = mats_default if mats_default is not None else [dict(_MAT_VAZIO)]
+
+    st.markdown("**🔧 Materiais necessários**")
+    mats = st.session_state[session_key]
+
+    for mi, mitem in enumerate(mats):
+        mc1, mc2, mc3, mc4, mc5 = st.columns([3, 1.2, 1, 1.4, 0.5])
+        mitem["descricao"]  = mc1.text_input("Descrição",  value=mitem.get("descricao", ""),
+                                              key=f"{session_key}_d{mi}", label_visibility="collapsed",
+                                              placeholder="Ex: Disjuntor 40A")
+        un_idx = _UNIDADES_MAT.index(mitem.get("unidade", "un")) if mitem.get("unidade", "un") in _UNIDADES_MAT else 0
+        mitem["unidade"]    = mc2.selectbox("Un.", _UNIDADES_MAT, index=un_idx,
+                                            key=f"{session_key}_u{mi}", label_visibility="collapsed")
+        mitem["quantidade"] = mc3.number_input("Qtd", value=float(mitem.get("quantidade", 1)),
+                                               min_value=0.0, step=1.0,
+                                               key=f"{session_key}_q{mi}", label_visibility="collapsed")
+        mitem["custo_unit"] = mc4.number_input("R$ unit.", value=float(mitem.get("custo_unit", 0.0)),
+                                               min_value=0.0, step=0.01, format="%.2f",
+                                               key=f"{session_key}_c{mi}", label_visibility="collapsed")
+        if mc5.button("❌", key=f"{session_key}_del{mi}") and len(mats) > 1:
+            mats.pop(mi); st.rerun()
+
+    if st.button("＋ Adicionar material", key=f"{session_key}_add"):
+        mats.append(dict(_MAT_VAZIO)); st.rerun()
+
+    subtotal = sum(m.get("quantidade", 0) * m.get("custo_unit", 0) for m in mats)
+    if subtotal > 0:
+        st.markdown(
+            f"<div style='text-align:right;font-size:12px;color:{COR_AZUL};'>"
+            f"Subtotal: <strong>R$ {subtotal:,.2f}</strong></div>",
+            unsafe_allow_html=True
+        )
+    return mats
 
 def tela_novo():
     banner("NOVO RELATÓRIO")
@@ -708,30 +806,15 @@ def tela_novo():
                     prazo = st.selectbox("PRAZO / SLA", ["Imediato (0–24h)", "Urgente (até 7 dias)", "Planejado (até 30 dias)", "Monitorar"], key=f"prazo_{safe_key}")
                     st.markdown(_sla_badge_html(prazo), unsafe_allow_html=True)
                 
-                st.markdown("**🔧 Materiais necessários**")
                 mat_list_key = f"mats_{safe_key}"
-                if mat_list_key not in st.session_state:
-                    st.session_state[mat_list_key] = [{"descricao": "", "unidade": "un", "quantidade": 1, "custo_unit": 0.0}]
-                for mi, mitem in enumerate(st.session_state[mat_list_key]):
-                    mc1, mc2, mc3, mc4, mc5 = st.columns([3, 1.2, 1, 1.4, 0.5])
-                    mitem["descricao"]  = mc1.text_input("Descrição", value=mitem["descricao"],  key=f"md_{safe_key}_{mi}", label_visibility="collapsed", placeholder="Ex: Disjuntor 40A")
-                    mitem["unidade"]    = mc2.selectbox("Un.", ["un","m","kg","kit","cx","hr"], index=["un","m","kg","kit","cx","hr"].index(mitem["unidade"]), key=f"mu_{safe_key}_{mi}", label_visibility="collapsed")
-                    mitem["quantidade"] = mc3.number_input("Qtd", value=float(mitem["quantidade"]), min_value=0.0, step=1.0, key=f"mq_{safe_key}_{mi}", label_visibility="collapsed")
-                    mitem["custo_unit"] = mc4.number_input("R$ unit.", value=float(mitem["custo_unit"]), min_value=0.0, step=0.01, format="%.2f", key=f"mc_{safe_key}_{mi}", label_visibility="collapsed")
-                    if mc5.button("❌", key=f"mdel_{safe_key}_{mi}") and len(st.session_state[mat_list_key]) > 1:
-                        st.session_state[mat_list_key].pop(mi); st.rerun()
-                if st.button("＋ Adicionar material", key=f"madd_{safe_key}"):
-                    st.session_state[mat_list_key].append({"descricao": "", "unidade": "un", "quantidade": 1, "custo_unit": 0.0}); st.rerun()
-                subtotal = sum(m["quantidade"] * m["custo_unit"] for m in st.session_state[mat_list_key])
-                if subtotal > 0:
-                    st.markdown(f"<div style='text-align:right;font-size:12px;color:{COR_AZUL};'>Subtotal: <strong>R$ {subtotal:,.2f}</strong></div>", unsafe_allow_html=True)
+                mats = _widget_materiais(mat_list_key)
 
                 fotos_proc.append({
                     "foto_id": foto_id, "caminho": caminho_foto, "type": "image/jpeg",
                     "titulo": tit.strip() or f"Evidência {idx+1}", "comentarios": com.strip() or "N/A",
                     "filename": arquivo.name, "severidade": sev, "categoria": cat, "prazo_correcao": prazo,
-                    "materiais": st.session_state.get(mat_list_key, []),
-                    "material_necessario": ", ".join(m["descricao"] for m in st.session_state.get(mat_list_key, []) if m["descricao"].strip()),
+                    "materiais": mats,
+                    "material_necessario": ", ".join(m["descricao"] for m in mats if m.get("descricao","").strip()),
                 })
 
     secao("📎", "3. ANEXOS ADICIONAIS")
@@ -798,35 +881,32 @@ def tela_novo():
 def _render_cadastrais(row, lid):
     secao("📋", "DADOS CADASTRAIS")
     e1, e2, e3 = st.columns(3)
+    _OPTS_STATUS = ["✅ Aprovado", "⚠️ Aprovado com Ressalvas", "❌ Reprovado", "🔄 Em Acompanhamento"]
     with e1:
-        tit = st.text_input(LBL_TITULO, value=row['titulo'], key=f"tit_{lid}")
-        con = st.text_input("CONTATO", value=row['contato'], key=f"con_{lid}")
-        
-        val_art = row['art_rrt'] if 'art_rrt' in row.keys() and row['art_rrt'] else ""
-        art = st.text_input("ART / RRT Nº", value=val_art, key=f"art_{lid}")
+        tit = st.text_input(LBL_TITULO, value=_row_get(row, 'titulo'), key=f"tit_{lid}")
+        con = st.text_input("CONTATO", value=_row_get(row, 'contato'), key=f"con_{lid}")
+        art = st.text_input("ART / RRT Nº", value=_row_get(row, 'art_rrt'), key=f"art_{lid}")
     with e2:
-        emp = st.text_input("EMPRESA", value=row['empresa'], key=f"emp_{lid}")
-        tel = st.text_input("TELEFONE", value=row['telefone'], key=f"tel_{lid}")
-        
-        val_status = row['status_laudo'] if 'status_laudo' in row.keys() and row['status_laudo'] else "✅ Aprovado"
-        status = st.selectbox("STATUS DO LAUDO", ["✅ Aprovado", "⚠️ Aprovado com Ressalvas", "❌ Reprovado", "🔄 Em Acompanhamento"], index=["✅ Aprovado", "⚠️ Aprovado com Ressalvas", "❌ Reprovado", "🔄 Em Acompanhamento"].index(val_status), key=f"status_{lid}")
+        emp = st.text_input("EMPRESA", value=_row_get(row, 'empresa'), key=f"emp_{lid}")
+        tel = st.text_input("TELEFONE", value=_row_get(row, 'telefone'), key=f"tel_{lid}")
+        val_status = _row_get(row, 'status_laudo', "✅ Aprovado")
+        status = st.selectbox("STATUS DO LAUDO", _OPTS_STATUS,
+                              index=_OPTS_STATUS.index(val_status) if val_status in _OPTS_STATUS else 0,
+                              key=f"status_{lid}")
     with e3:
-        eml = st.text_input("E-MAIL", value=row['email'], key=f"eml_{lid}")
-        sit = st.text_input("SITE", value=row['site_id'], key=f"sit_{lid}")
-        dat = st.text_input("DATA E HORA", value=row['data_hora'], key=f"dat_{lid}")
-    
-    val_end = row['endereco'] if 'endereco' in row.keys() and row['endereco'] else ""
-    end = st.text_input("ENDEREÇO", value=val_end, key=f"end_{lid}")
-    
-    val_conc = row['conclusao'] if 'conclusao' in row.keys() and row['conclusao'] else ""
-    conclusao = st.text_area("CONCLUSÃO E PARECER", value=val_conc, key=f"conclusao_{lid}")
-    
+        eml = st.text_input("E-MAIL", value=_row_get(row, 'email'), key=f"eml_{lid}")
+        sit = st.text_input("SITE", value=_row_get(row, 'site_id'), key=f"sit_{lid}")
+        dat = st.text_input("DATA E HORA", value=_row_get(row, 'data_hora'), key=f"dat_{lid}")
+
+    end = st.text_input("ENDEREÇO", value=_row_get(row, 'endereco'), key=f"end_{lid}")
+    conclusao = st.text_area("CONCLUSÃO E PARECER", value=_row_get(row, 'conclusao'), key=f"conclusao_{lid}")
+
     c_lat, c_lon = st.columns(2)
     with c_lat:
-        lat_val = float(row['latitude']) if 'latitude' in row.keys() and row['latitude'] else 0.0
+        lat_val = float(_row_get(row, 'latitude', 0.0) or 0.0)
         lat = st.number_input("LATITUDE", value=lat_val, format="%.6f", step=0.000001, key=f"lat_{lid}")
     with c_lon:
-        lon_val = float(row['longitude']) if 'longitude' in row.keys() and row['longitude'] else 0.0
+        lon_val = float(_row_get(row, 'longitude', 0.0) or 0.0)
         lon = st.number_input("LONGITUDE", value=lon_val, format="%.6f", step=0.000001, key=f"lon_{lid}")
 
     return {"tit": tit, "con": con, "emp": emp, "tel": tel, "eml": eml, "sit": sit, "dat": dat, "end": end, "lat": lat, "lon": lon, "art_rrt": art, "status_laudo": status, "conclusao": conclusao}
@@ -896,25 +976,13 @@ def _render_item_edicao(f, k, lid, prefixo, total_fotos, db_field):
         nprazo = st.selectbox("PRAZO / SLA", ["Imediato (0–24h)", "Urgente (até 7 dias)", "Planejado (até 30 dias)", "Monitorar"], index=["Imediato (0–24h)", "Urgente (até 7 dias)", "Planejado (até 30 dias)", "Monitorar"].index(f.get("prazo_correcao", "Monitorar")), key=f"{prefixo}p_{lid}_{fid}")
         st.markdown(_sla_badge_html(nprazo), unsafe_allow_html=True)
         
-        st.markdown("**🔧 Materiais necessários**")
         emat_key = f"emats_{prefixo}_{lid}_{fid}"
-        mats_default = f.get('materiais') or ([{"descricao": f.get('material_necessario',''), "unidade":"un","quantidade":1,"custo_unit":0.0}] if f.get('material_necessario','').strip() else [{"descricao":"","unidade":"un","quantidade":1,"custo_unit":0.0}])
-        if emat_key not in st.session_state:
-            st.session_state[emat_key] = mats_default
-        for mi, mitem in enumerate(st.session_state[emat_key]):
-            ec1, ec2, ec3, ec4, ec5 = st.columns([3, 1.2, 1, 1.4, 0.5])
-            mitem["descricao"]  = ec1.text_input("Descrição", value=mitem.get("descricao",""),  key=f"emd_{prefixo}_{lid}_{fid}_{mi}", label_visibility="collapsed", placeholder="Ex: Disjuntor 40A")
-            mitem["unidade"]    = ec2.selectbox("Un.", ["un","m","kg","kit","cx","hr"], index=["un","m","kg","kit","cx","hr"].index(mitem.get("unidade","un")), key=f"emu_{prefixo}_{lid}_{fid}_{mi}", label_visibility="collapsed")
-            mitem["quantidade"] = ec3.number_input("Qtd", value=float(mitem.get("quantidade",1)), min_value=0.0, step=1.0, key=f"emq_{prefixo}_{lid}_{fid}_{mi}", label_visibility="collapsed")
-            mitem["custo_unit"] = ec4.number_input("R$ unit.", value=float(mitem.get("custo_unit",0.0)), min_value=0.0, step=0.01, format="%.2f", key=f"emc_{prefixo}_{lid}_{fid}_{mi}", label_visibility="collapsed")
-            if ec5.button("❌", key=f"emdel_{prefixo}_{lid}_{fid}_{mi}") and len(st.session_state[emat_key]) > 1:
-                st.session_state[emat_key].pop(mi); st.rerun()
-        if st.button("＋ Adicionar material", key=f"emadd_{prefixo}_{lid}_{fid}"):
-            st.session_state[emat_key].append({"descricao":"","unidade":"un","quantidade":1,"custo_unit":0.0}); st.rerun()
-        esubtotal = sum(m.get("quantidade",0)*m.get("custo_unit",0) for m in st.session_state[emat_key])
-        if esubtotal > 0:
-            st.markdown(f"<div style='text-align:right;font-size:12px;color:{COR_AZUL};'>Subtotal: <strong>R$ {esubtotal:,.2f}</strong></div>", unsafe_allow_html=True)
-        nm = ", ".join(m["descricao"] for m in st.session_state[emat_key] if m.get("descricao","").strip())
+        mats_default = f.get('materiais') or (
+            [{"descricao": f.get('material_necessario', ''), "unidade": "un", "quantidade": 1, "custo_unit": 0.0}]
+            if f.get('material_necessario', '').strip() else None
+        )
+        mats = _widget_materiais(emat_key, mats_default)
+        nm = ", ".join(m["descricao"] for m in mats if m.get("descricao", "").strip())
     with col_ctrl:
         st.markdown("<br>", unsafe_allow_html=True)
         if k > 0 and st.button("⬆️", key=f"{prefixo}up_{lid}_{fid}"):
@@ -923,9 +991,8 @@ def _render_item_edicao(f, k, lid, prefixo, total_fotos, db_field):
             _executar_acao_inline(lid, fid, "down", prefixo, db_field); st.rerun()
         if st.button("❌", key=f"{prefixo}del_{lid}_{fid}"):
             _executar_acao_inline(lid, fid, "del", prefixo, db_field); st.rerun()
-    emat_key2 = f"emats_{prefixo}_{lid}_{fid}"
     fc = f.copy(); fc['titulo'] = nt; fc['comentarios'] = nc; fc['material_necessario'] = nm; fc['prazo_correcao'] = nprazo
-    fc['materiais'] = st.session_state.get(emat_key2, f.get('materiais', []))
+    fc['materiais'] = st.session_state.get(emat_key, f.get('materiais', []))
     return fc
 
 def _render_edicao_lista(fotos, lid, titulo_sec, icone, prefixo):
@@ -973,27 +1040,27 @@ def _render_novas_fotos(lid, db_existentes):
 
 def _tratar_botoes_acao_pdf(lid, row, state):
     if st.button(f"📄 GERAR PDF — {sanitizar(row['site_id'])}", key=f"pdf_{lid}", type="primary"):
-        num_rel = row['numero_relatorio'] if 'numero_relatorio' in row.keys() and row['numero_relatorio'] else ""
+        num_rel = _row_get(row, 'numero_relatorio')
         if not num_rel.strip():
             with sqlite3.connect(DB_NAME) as conn:
                 num_rel = proximo_numero_relatorio(conn)
                 conn.execute("UPDATE relatorios SET numero_relatorio=?, revisao=? WHERE id=?", (num_rel, "Rev.00", lid))
-        
+
         dados_pdf = {
-            "titulo": row['titulo'], 
-            "contato": row['contato'], 
-            "empresa": row['empresa'], 
-            "telefone": row['telefone'],
-            "email": row['email'], 
-            "site_id": row['site_id'], 
-            "endereco": row['endereco'] if 'endereco' in row.keys() else '',
-            "data_hora": row['data_hora'], 
-            "tecnico": row['tecnico'] if 'tecnico' in row.keys() and row['tecnico'] else row['contato'],
-            "numero_relatorio": num_rel, 
-            "revisao": row['revisao'] if 'revisao' in row.keys() and row['revisao'] else 'Rev.00',
-            "art_rrt": row['art_rrt'] if 'art_rrt' in row.keys() and row['art_rrt'] else '', 
-            "conclusao": row['conclusao'] if 'conclusao' in row.keys() and row['conclusao'] else '', 
-            "status_laudo": row['status_laudo'] if 'status_laudo' in row.keys() and row['status_laudo'] else '✅ Aprovado'
+            "titulo":            _row_get(row, 'titulo'),
+            "contato":           _row_get(row, 'contato'),
+            "empresa":           _row_get(row, 'empresa'),
+            "telefone":          _row_get(row, 'telefone'),
+            "email":             _row_get(row, 'email'),
+            "site_id":           _row_get(row, 'site_id'),
+            "endereco":          _row_get(row, 'endereco'),
+            "data_hora":         _row_get(row, 'data_hora'),
+            "tecnico":           _row_get(row, 'tecnico') or _row_get(row, 'contato'),
+            "numero_relatorio":  num_rel,
+            "revisao":           _row_get(row, 'revisao', 'Rev.00'),
+            "art_rrt":           _row_get(row, 'art_rrt'),
+            "conclusao":         _row_get(row, 'conclusao'),
+            "status_laudo":      _row_get(row, 'status_laudo', '✅ Aprovado'),
         }
         
         with st.spinner("GERANDO PDF EM MEMÓRIA..."):
@@ -1155,7 +1222,7 @@ def tela_dashboard():
         rows_resumo = ""
         for _, r_res in df_filtrado.iterrows():
             fotos_res  = json.loads(r_res['fotos_json'] or '[]')
-            n_crit_res = sum(1 for f in fotos_res if {'Crítico':'Critico','Observação':'Observacao'}.get(f.get('severidade','Normal'),f.get('severidade','Normal')) == 'Critico')
+            n_crit_res = sum(1 for f in fotos_res if normalizar_sev(f.get('severidade','Normal')) == 'Critico')
             prazo_res  = next((f.get('prazo_correcao','Monitorar') for f in fotos_res), 'Monitorar')
             m_res      = _SLA_META.get(prazo_res, _SLA_META["Monitorar"])
             cor_crit   = "#DA291C" if n_crit_res > 0 else "#16A34A"
@@ -1395,7 +1462,11 @@ def tela_dashboard():
         mc1, mc2, mc3 = st.columns(3)
         mc1.markdown(f'<div class="eng-metric"><div class="eng-metric-val" style="color:#16A34A;">{n_concluidas}</div><div class="eng-metric-label">CONCLUÍDAS</div></div>', unsafe_allow_html=True)
         mc2.markdown(f'<div class="eng-metric"><div class="eng-metric-val" style="color:#D97706;">{n_andamento}</div><div class="eng-metric-label">EM ANDAMENTO</div></div>', unsafe_allow_html=True)
-        mc3.markdown(f'<div class="eng-metric"><div class="eng-metric-val" style="color:#DA291C;">{int(df_filtrado["fotos_json"].apply(lambda x: any({"Crítico":"Critico","Observação":"Observacao"}.get(f.get("severidade","Normal"),f.get("severidade","Normal"))=="Critico" for f in json.loads(x or "[]"))).sum())}</div><div class="eng-metric-label">C/ ANOMALIA CRÍTICA</div></div>', unsafe_allow_html=True)
+        n_anomalia_critica = int(df_filtrado["fotos_json"].apply(
+            lambda x: any(normalizar_sev(f.get("severidade", "Normal")) == "Critico"
+                          for f in json.loads(x or "[]"))
+        ).sum())
+        mc3.markdown(f'<div class="eng-metric"><div class="eng-metric-val" style="color:#DA291C;">{n_anomalia_critica}</div><div class="eng-metric-label">C/ ANOMALIA CRÍTICA</div></div>', unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
 
@@ -1472,9 +1543,9 @@ def tela_dashboard():
 
         df_orc_view = df_orc.copy()
         if sev_filtro_orc != "Todas":
-            df_orc_view = df_orc_view[df_orc_view['Severidade'].str.replace('í','i').str.replace('ã','a') == sev_filtro_orc]
+            df_orc_view = df_orc_view[df_orc_view['Severidade'].apply(normalizar_sev) == sev_filtro_orc]
 
-        _sev_cor_orc = {"Critico":"#DA291C","Crítico":"#DA291C","Observacao":"#D97706","Observação":"#D97706"}
+        _sev_cor_orc = _SEV_COR  # reutiliza constante global
         rows_orc_html = ""
         for _, r_orc in df_orc_view.iterrows():
             cor_sev_orc = _sev_cor_orc.get(str(r_orc['Severidade']), "#16A34A")
@@ -1596,13 +1667,15 @@ def tela_roteirizacao():
             return
             
         with st.spinner("Calculando sequenciamento ótimo e projetando métricas de Field Service..."):
-            base_row = df_sites[df_sites['site_id'] == site_base].iloc[0]
-            pt_partida = {'id': base_row['site_id'], 'lon': float(base_row['longitude']), 'lat': float(base_row['latitude'])}
-            
-            alvos = []
-            for s in sites_alvo:
-                row = df_sites[df_sites['site_id'] == s].iloc[0]
-                alvos.append({'id': row['site_id'], 'lon': float(row['longitude']), 'lat': float(row['latitude'])})
+            # Index por site_id para lookup O(1) em vez de filtro O(n) por site
+            df_idx = df_sites.set_index('site_id')
+            base_row = df_idx.loc[site_base]
+            pt_partida = {'id': site_base, 'lon': float(base_row['longitude']), 'lat': float(base_row['latitude'])}
+
+            alvos = [
+                {'id': s, 'lon': float(df_idx.loc[s, 'longitude']), 'lat': float(df_idx.loc[s, 'latitude'])}
+                for s in sites_alvo
+            ]
                 
             rota_otimizada = resolver_tsp_local(pt_partida, alvos)
             coords_lista = [[p['lon'], p['lat']] for p in rota_otimizada]
@@ -1853,7 +1926,7 @@ def tela_painel_sla():
         for f_item in json.loads(r_row['fotos_json'] or '[]'):
             prazo_item = f_item.get('prazo_correcao', 'Monitorar')
             sev_item   = f_item.get('severidade', 'Normal')
-            sev_norm   = {'Crítico':'Critico','Observação':'Observacao'}.get(sev_item, sev_item)
+            sev_norm   = normalizar_sev(sev_item)
             if (prazo_sel == "Todos" or prazo_item == prazo_sel) and \
                (sev_sel   == "Todas" or sev_norm  == sev_sel):
                 itens_sla.append({
@@ -2096,11 +2169,11 @@ def gerar_excel_rota(rota_otimizada, distancia_km, duracao_seg, tecnico, evidenc
         _cab(ws3, col, 1, hdr, fill=azul_fill)
 
     row_ev = 2
-    sev_fills = {'Critico': vermelho_fill, 'Crítico': vermelho_fill, 'Observacao': amarelo_fill, 'Observação': amarelo_fill}
+    sev_fills = {'Critico': vermelho_fill, 'Observacao': amarelo_fill}
     for site_id, evidencias in evidencias_por_site.items():
         for ev in evidencias:
             sev = ev.get('severidade', 'Normal')
-            sfill = sev_fills.get(sev, verde_fill)
+            sfill = sev_fills.get(normalizar_sev(sev), verde_fill)
             ws3.row_dimensions[row_ev].height = 18
             row_fill = PatternFill("solid", fgColor="EBF0FA") if row_ev % 2 == 0 else PatternFill()
             _val(ws3, 1, row_ev, site_id, row_fill)
@@ -2127,6 +2200,12 @@ if not check_password():
 
 init_db()
 aplicar_estilo()
+
+# Exibe alertas de malware detectados em varreduras assíncronas anteriores
+if st.session_state.get("_malware_alertas"):
+    for _nome_susp in st.session_state.pop("_malware_alertas"):
+        st.error(f"🚨 SEGURANÇA: Arquivo suspeito bloqueado e removido — **{sanitizar(_nome_susp)}**. "
+                 "Faça novo upload com um arquivo válido.")
 
 # ── Interceptar modo destaque via query params ─────────────────────────────
 _qp = st.query_params
@@ -2198,11 +2277,9 @@ if _qp.get("destaque"):
             "Planejado (até 30 dias)":"#eff6ff",
             "Monitorar":              "#f8fafc",
         }
-        _sev_cor = {"Critico":"#DA291C","Crítico":"#DA291C","Observacao":"#D97706","Observação":"#D97706"}
-
         for _f_d in _fotos_d:
             _sev_f   = _f_d.get('severidade','Normal')
-            _cor_sev = _sev_cor.get(_sev_f, "#16A34A")
+            _cor_sev = _SEV_COR.get(_sev_f, "#16A34A")
             _bg_card = _prazo_bg.get(_f_d.get('prazo_correcao','Monitorar'), "#f8fafc")
             _mats_f  = _f_d.get('materiais') or []
             _mat_str = ", ".join(m.get('descricao','') for m in _mats_f if m.get('descricao','').strip()) or "—"
