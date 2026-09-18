@@ -17,7 +17,7 @@ import html as html_mod
 import pandas as pd
 import plotly.express as px
 import pydeck as pdk
-import xml.etree.ElementTree as ET
+import defusedxml.ElementTree as ET  # protege contra XXE e XML Bomb (billion laughs)
 import filetype
 import qrcode
 import threading
@@ -52,8 +52,12 @@ def scan_malware_async(file_path: str):
                 if "_malware_alertas" not in st.session_state:
                     st.session_state["_malware_alertas"] = []
                 st.session_state["_malware_alertas"].append(os.path.basename(file_path))
-        except Exception:
-            pass
+        except Exception as exc:
+            # Falha no scan não deve derrubar o app, mas deve ser registrada
+            try:
+                registrar_auditoria("erro_scan_malware", detalhe=f"{file_path}: {exc}")
+            except Exception:
+                pass
     threading.Thread(target=_scan, daemon=True).start()
 
 def check_password():
@@ -187,6 +191,33 @@ def _row_get(row, campo: str, default=""):
         return default
 
 # Mapeamento canônico de severidade — elimina duplicação de dicts espalhados pelo código
+_UPLOAD_MAX_BYTES: int = 20 * 1024 * 1024  # 20 MB por arquivo
+_EXTS_IMAGEM_PERMITIDAS: frozenset[str] = frozenset({'jpg', 'jpeg', 'png', 'gif', 'webp'})
+
+def _caminho_seguro(nome_arquivo: str) -> str:
+    """
+    Retorna o caminho absoluto de nome_arquivo dentro de FOTOS_DIR.
+    Lança ValueError se o path resultante escapar do diretório (path traversal).
+    """
+    base = os.path.realpath(FOTOS_DIR)
+    alvo = os.path.realpath(os.path.join(base, nome_arquivo))
+    if not alvo.startswith(base + os.sep):
+        raise ValueError(f"Path traversal bloqueado: '{nome_arquivo}'")
+    return alvo
+
+def _validar_upload(nome_arquivo: str, raw: bytes) -> str | None:
+    """
+    Valida magic bytes e tamanho do arquivo.
+    Retorna mensagem de erro (str) se inválido, None se OK.
+    """
+    if len(raw) > _UPLOAD_MAX_BYTES:
+        return f"'{sanitizar(nome_arquivo)}' excede o limite de 20 MB ({len(raw)//1024//1024} MB). Upload rejeitado."
+    tipo_real = filetype.guess(raw)
+    if not tipo_real or tipo_real.extension not in _EXTS_IMAGEM_PERMITIDAS:
+        ext_detectada = tipo_real.extension if tipo_real else 'desconhecido'
+        return f"'{sanitizar(nome_arquivo)}' não é imagem válida (detectado: {ext_detectada}). Upload rejeitado."
+    return None
+
 _SEV_CANONICAL: dict[str, str] = {"Crítico": "Critico", "Observação": "Observacao"}
 _SEV_COR: dict[str, str] = {
     "Critico":   "#DA291C",
@@ -229,9 +260,14 @@ def _gerar_qrcode_b64(texto: str) -> str:
 def _botao_backup_db():
     buf = io.BytesIO()
     with open(DB_NAME, "rb") as f:
-        buf.write(f.read())
+        conteudo = f.read()
+    buf.write(conteudo)
+    hash_db = hashlib.sha256(conteudo).hexdigest()[:16]
     nome = f"GIRCP_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
     st.sidebar.download_button("💾 Backup do Banco", buf.getvalue(), nome, "application/octet-stream")
+    st.sidebar.caption(f"🔑 SHA-256: `{hash_db}`")
+    st.sidebar.warning("⚠️ O .db contém todos os laudos. Armazene com segurança.", icon="🔒")
+    registrar_auditoria("backup_banco", detalhe=f"Download do banco — hash:{hash_db}")
 
 def _css_pdf() -> str:
     return f"""
@@ -777,17 +813,17 @@ def tela_novo():
         for idx, filename in enumerate(st.session_state["ordem_evidencias"]):
             arquivo  = dict_arquivos[filename]
             raw      = arquivo.getvalue()
-            
-            tipo_real = filetype.guess(raw)
-            if not tipo_real or tipo_real.extension not in ('jpg', 'jpeg', 'png', 'gif', 'webp'):
-                st.error(f"Arquivo '{arquivo.name}' não é imagem. Upload rejeitado por segurança.")
+
+            erro_upload = _validar_upload(arquivo.name, raw)
+            if erro_upload:
+                st.error(f"🚫 {erro_upload}")
                 continue
 
             raw_comp = comprimir_para_pdf(raw)
             foto_id  = hashlib.sha256(raw).hexdigest()[:16]
             safe_key = f"ev_{idx}_{hashlib.md5(filename.encode()).hexdigest()[:8]}"
             
-            caminho_foto = os.path.join(FOTOS_DIR, f"ev_{foto_id}.jpg")
+            caminho_foto = _caminho_seguro(f"ev_{foto_id}.jpg")
             with open(caminho_foto, "wb") as f_out: f_out.write(raw_comp)
             scan_malware_async(caminho_foto)
 
@@ -823,15 +859,15 @@ def tela_novo():
     if arq_extras:
         for idx_ex, arq_ex in enumerate(arq_extras):
             raw_ex = arq_ex.getvalue()
-            tipo_real = filetype.guess(raw_ex)
-            if not tipo_real or tipo_real.extension not in ('jpg', 'jpeg', 'png', 'gif', 'webp'):
-                st.error(f"Arquivo '{arq_ex.name}' não é imagem. Upload rejeitado por segurança.")
+            erro_upload_ex = _validar_upload(arq_ex.name, raw_ex)
+            if erro_upload_ex:
+                st.error(f"🚫 {erro_upload_ex}")
                 continue
 
             raw_comp_ex = comprimir_para_pdf(raw_ex)
             fid_ex = hashlib.sha256(raw_ex).hexdigest()[:16]
             
-            caminho_extra = os.path.join(FOTOS_DIR, f"ex_{fid_ex}.jpg")
+            caminho_extra = _caminho_seguro(f"ex_{fid_ex}.jpg")
             with open(caminho_extra, "wb") as f_out_ex: f_out_ex.write(raw_comp_ex)
             scan_malware_async(caminho_extra)
             
@@ -1013,14 +1049,14 @@ def _render_novas_fotos(lid, db_existentes):
         ids = {f.get("foto_id") for f in db_existentes}
         for idx_n, a in enumerate(arq):
             raw = a.getvalue()
-            tipo_real = filetype.guess(raw)
-            if not tipo_real or tipo_real.extension not in ('jpg', 'jpeg', 'png', 'gif', 'webp'):
-                st.error(f"Arquivo '{a.name}' não é imagem. Upload rejeitado por segurança.")
+            erro_upload_n = _validar_upload(a.name, raw)
+            if erro_upload_n:
+                st.error(f"🚫 {erro_upload_n}")
                 continue
 
             raw_comp = comprimir_para_pdf(raw)
             fid = hashlib.sha256(raw).hexdigest()[:16]
-            caminho_foto = os.path.join(FOTOS_DIR, f"new_{lid}_{fid}.jpg")
+            caminho_foto = _caminho_seguro(f"new_{lid}_{fid}.jpg")
             with open(caminho_foto, "wb") as f_out: f_out.write(raw_comp)
             scan_malware_async(caminho_foto)
                 
@@ -1167,9 +1203,13 @@ def tela_pesquisa():
 
     st.markdown("<br>", unsafe_allow_html=True)
     ta, tb, tc = st.columns(3)
-    with ta: st.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{len(rows)}</div><div class="eng-metric-label">RESULTADOS</div></div>', unsafe_allow_html=True)
-    with tb: st.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{sum(len(json.loads(r["fotos_json"] if r["fotos_json"] else "[]")) for r in rows)}</div><div class="eng-metric-label">EVIDÊNCIAS</div></div>', unsafe_allow_html=True)
-    with tc: st.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{sum(len(json.loads(r["extras_json"] if "extras_json" in r.keys() and r["extras_json"] else "[]")) for r in rows)}</div><div class="eng-metric-label">ANEXOS</div></div>', unsafe_allow_html=True)
+    # Métricas pré-computadas com int() para garantir que apenas números entram no HTML
+    _n_resultados = int(len(rows))
+    _n_evidencias = int(sum(len(json.loads(r['fotos_json'] if r['fotos_json'] else '[]')) for r in rows))
+    _n_anexos     = int(sum(len(json.loads(r['extras_json'] if 'extras_json' in r.keys() and r['extras_json'] else '[]')) for r in rows))
+    with ta: st.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{_n_resultados}</div><div class="eng-metric-label">RESULTADOS</div></div>', unsafe_allow_html=True)
+    with tb: st.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{_n_evidencias}</div><div class="eng-metric-label">EVIDÊNCIAS</div></div>', unsafe_allow_html=True)
+    with tc: st.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{_n_anexos}</div><div class="eng-metric-label">ANEXOS</div></div>', unsafe_allow_html=True)
     st.markdown("<br>", unsafe_allow_html=True)
     st.divider()
 
