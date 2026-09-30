@@ -5,3 +5,9 @@
 banco_fotos_gircp/
 __pycache__/
 *.pyc
+Relatorio_*.pdf
+Roteiro_*.pdf
+Roteiro_*.xlsx
+Orcamento_*.xlsx
+GIRCP_backup_*.db
+assinatura_tecnico.*
