@@ -1734,6 +1734,23 @@ def resolver_tsp_local(ponto_partida, lista_sites):
         
     return rota
 
+def geocodificar_endereco(endereco):
+    """Converte endereço em (lat, lon) via Nominatim/OpenStreetMap (somente Brasil). Retorna None se falhar."""
+    try:
+        r = requests.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={"q": endereco, "format": "json", "limit": 1, "countrycodes": "br"},
+            headers={"User-Agent": "GIRCP-FieldService/1.0"},
+            timeout=10,
+        )
+        r.raise_for_status()
+        dados = r.json()
+        if dados:
+            return float(dados[0]["lat"]), float(dados[0]["lon"])
+    except Exception:
+        pass
+    return None
+
 def formatar_tempo(segundos):
     horas = int(segundos // 3600)
     minutos = int((segundos % 3600) // 60)
@@ -1755,9 +1772,9 @@ def tela_roteirizacao():
     st.markdown("### 📍 Configuração da Rota")
     c_base, c_sites = st.columns(2)
     with c_base:
-        site_base = st.selectbox("Ponto de Partida (Base/Hotel):", lista_opcoes)
+        partida_txt = st.text_input("Ponto de Partida (Base/Hotel) — coordenadas (lat,lon) ou endereço:", value="-23.5051209,-46.8109935", key="rota_ponto_partida")
     with c_sites:
-        sites_alvo = st.multiselect("Selecione os Sites a Visitar:", [s for s in lista_opcoes if s != site_base])
+        sites_alvo = st.multiselect("Selecione os Sites a Visitar:", lista_opcoes)
         
     ors_token = st.text_input("Token OpenRouteService (Opcional - Deixe em branco para usar TSP Local):", type="password", help="Gere sua chave gratuita em openrouteservice.org para roteamento real nas vias.")
     
@@ -1769,8 +1786,18 @@ def tela_roteirizacao():
         with st.spinner("Calculando sequenciamento ótimo e projetando métricas de Field Service..."):
             # Index por site_id para lookup O(1) em vez de filtro O(n) por site
             df_idx = df_sites.set_index('site_id')
-            base_row = df_idx.loc[site_base]
-            pt_partida = {'id': site_base, 'lon': float(base_row['longitude']), 'lat': float(base_row['latitude'])}
+            try:
+                _lat_p, _lon_p = [float(x.strip()) for x in partida_txt.replace(";", ",").split(",")]
+                if not (-90 <= _lat_p <= 90 and -180 <= _lon_p <= 180):
+                    raise ValueError
+            except Exception:
+                _geo = geocodificar_endereco(partida_txt.strip()) if partida_txt.strip() else None
+                if _geo is None:
+                    st.error("Ponto de partida não encontrado. Use coordenadas (-23.5051209,-46.8109935) ou um endereço completo, ex.: Rua Petrolina, 296, Jardim Mutinga, Barueri, SP")
+                    return
+                _lat_p, _lon_p = _geo
+                st.caption(f"📍 Endereço localizado: {_lat_p:.7f},{_lon_p:.7f}")
+            pt_partida = {'id': 'BASE', 'lon': _lon_p, 'lat': _lat_p}
 
             alvos = [
                 {'id': s, 'lon': float(df_idx.loc[s, 'longitude']), 'lat': float(df_idx.loc[s, 'latitude'])}
