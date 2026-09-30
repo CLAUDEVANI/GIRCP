@@ -1,0 +1,20 @@
+# GIRCP — Configuração Streamlit
+
+[theme]
+primaryColor              = "#002060"
+backgroundColor           = "#FFFFFF"
+secondaryBackgroundColor  = "#F1F5F9"
+textColor                 = "#1E293B"
+font                      = "sans serif"
+
+[server]
+maxUploadSize             = 200
+enableCORS                = false
+enableXsrfProtection      = true
+headless                  = true
+
+[browser]
+gatherUsageStats          = false
+
+[runner]
+fastReruns                = true
