@@ -1,0 +1,7 @@
+.streamlit/secrets.toml
+*.db
+*.db-wal
+*.db-shm
+banco_fotos_gircp/
+__pycache__/
+*.pyc
