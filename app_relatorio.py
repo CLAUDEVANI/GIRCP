@@ -821,7 +821,7 @@ def tela_novo():
         email   = st.text_input("E-MAIL", value="clauevani.pereira@engemon.com.br", key="novo_email")
         site_id = st.text_input("IDENTIFICAÇÃO DO SITE", value=site_selecionado)
 
-    tecnico  = st.text_input("TÉCNICO EM CAMPO", value="Claudevani CRT: 247.652.xxx.xx", key="novo_tecnico")
+    tecnico  = st.text_input("TÉCNICO EM CAMPO", value="Claudevani", key="novo_tecnico")
     art_rrt = st.text_input("ART / RRT Nº", value="CRT - 247.652.xxx.xx", key="novo_art_rrt")
     endereco = st.text_input("ENDEREÇO FÍSICO", value=endereco_autofill)
 
@@ -1272,6 +1272,190 @@ def tela_pesquisa():
 
     for row in rows: _render_relatorio_expander(row)
 
+# ══════════════════════════════════════════════════════════════════════════
+# ESTATÍSTICAS GERAIS (fonte única: uma linha por evidência)
+# ══════════════════════════════════════════════════════════════════════════
+_PRAZOS_ORD = ["Imediato (0–24h)", "Urgente (até 7 dias)", "Planejado (até 30 dias)", "Monitorar"]
+_ORDEM_PRAZO = {p: i for i, p in enumerate(_PRAZOS_ORD)}
+
+def _txt_ou(v, padrao):
+    return padrao if (v is None or pd.isna(v) or not str(v).strip()) else str(v).strip()
+
+# Para juntar nomes diferentes da mesma pessoa, preencha: {"nome em minusculas": "Nome Padrao"}
+_ALIAS_TECNICO = {}
+
+def _normalizar_tecnico(v):
+    """Remove o registro (CRT/CREA/CFT) do nome e padroniza a caixa, para agrupar o mesmo tecnico."""
+    import re as _re
+    if v is None or pd.isna(v) or not str(v).strip():
+        return "Sem técnico"
+    nome = _re.split(r"\s*[-–—,;(]?\s*(?:CRT|CREA|CFT)\b", str(v).strip(), maxsplit=1, flags=_re.IGNORECASE)[0]
+    nome = " ".join(nome.split()).strip(" -–—,;:")
+    if not nome:
+        return "Sem técnico"
+    nome = nome.title()
+    for part in (" Da ", " De ", " Do ", " Das ", " Dos "):
+        nome = nome.replace(part, part.lower())
+    return _ALIAS_TECNICO.get(nome.casefold(), nome)
+
+def _card_kpi(valor, rotulo, cor=None):
+    estilo = f' style="color:{cor};"' if cor else ""
+    return f'<div class="eng-metric"><div class="eng-metric-val"{estilo}>{valor}</div><div class="eng-metric-label">{rotulo}</div></div>'
+
+def _montar_evidencias(df):
+    """Uma linha por evidência fotográfica. Todas as estatísticas partem daqui (evita contagens divergentes)."""
+    cols = ["laudo_id", "site_id", "tecnico", "data", "status_laudo", "titulo", "severidade",
+            "categoria", "prazo", "n_materiais", "mat_sem_custo", "custo"]
+    linhas = []
+    for _, r in df.iterrows():
+        try:
+            fotos = json.loads(r.get("fotos_json") or "[]")
+        except (ValueError, TypeError):
+            fotos = []
+        for f in fotos:
+            n_mat, sem_custo, custo = 0, 0, 0.0
+            for m in (f.get("materiais") or []):
+                if not str(m.get("descricao", "")).strip():
+                    continue
+                try:
+                    q = float(m.get("quantidade", 1))
+                    cu = float(m.get("custo_unit", 0.0))
+                except (ValueError, TypeError):
+                    q, cu = 1.0, 0.0
+                n_mat += 1
+                custo += q * cu
+                if cu == 0:
+                    sem_custo += 1
+            linhas.append({
+                "laudo_id": r.get("id"),
+                "site_id": _txt_ou(r.get("site_id"), "—"),
+                "tecnico": _txt_ou(r.get("tecnico"), _txt_ou(r.get("contato"), "—")),
+                "data": r.get("data_formatada"),
+                "status_laudo": _txt_ou(r.get("status_laudo"), "Não informado"),
+                "titulo": f.get("titulo", "—"),
+                "severidade": normalizar_sev(f.get("severidade", "Normal")),
+                "categoria": f.get("categoria", "Geral"),
+                "prazo": f.get("prazo_correcao", "Monitorar"),
+                "n_materiais": n_mat,
+                "mat_sem_custo": sem_custo,
+                "custo": custo,
+            })
+    return pd.DataFrame(linhas, columns=cols)
+
+def _render_estatisticas(df_f):
+    df_ev = _montar_evidencias(df_f)
+    n_laudos = len(df_f)
+    n_ev = len(df_ev)
+    n_crit = int((df_ev["severidade"] == "Critico").sum())
+    taxa_crit = (n_crit / n_ev * 100) if n_ev else 0.0
+    media_ev = (n_ev / n_laudos) if n_laudos else 0.0
+    n_urg = int(df_ev["prazo"].isin(_PRAZOS_ORD[:2]).sum())
+    custo_total = float(df_ev["custo"].sum())
+    n_sem_ev = int((df_f["qtd_fotos"] == 0).sum()) if "qtd_fotos" in df_f.columns else 0
+
+    secao("📐", "ESTATÍSTICAS GERAIS")
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.markdown(_card_kpi(f"{taxa_crit:.1f}%", "TAXA DE CRITICIDADE", COR_VERMELHO if n_crit else None), unsafe_allow_html=True)
+    k2.markdown(_card_kpi(f"{media_ev:.1f}", "MÉDIA EVID. / LAUDO"), unsafe_allow_html=True)
+    k3.markdown(_card_kpi(n_urg, "SLA IMEDIATO + URGENTE", "#ea580c" if n_urg else None), unsafe_allow_html=True)
+    k4.markdown(_card_kpi(f"R$ {custo_total:,.2f}", "CUSTO ESTIMADO", COR_AZUL), unsafe_allow_html=True)
+    k5.markdown(_card_kpi(n_sem_ev, "LAUDOS SEM EVIDÊNCIA", COR_AMARELO if n_sem_ev else None), unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    t_tec, t_site, t_cat, t_status, t_qual = st.tabs(
+        ["👷 Por técnico", "📍 Por site (risco)", "🖼️ Antes / Depois", "📋 Status dos laudos", "🧹 Qualidade dos dados"])
+
+    with t_tec:
+        if df_ev.empty:
+            st.info("Sem evidências para o filtro atual.")
+        else:
+            laudos_tec = df_f.apply(lambda r: _txt_ou(r.get("tecnico"), _txt_ou(r.get("contato"), "—")), axis=1).value_counts().rename("Laudos").rename_axis("tecnico")
+            evid = df_ev.groupby("tecnico").agg(
+                Evidencias=("titulo", "size"),
+                Criticas=("severidade", lambda x: int((x == "Critico").sum())),
+                Custo=("custo", "sum"))
+            tab = laudos_tec.to_frame().join(evid, how="left").fillna(0).reset_index()
+            tab["Evidencias"] = tab["Evidencias"].astype(int)
+            tab["Criticas"] = tab["Criticas"].astype(int)
+            tab["pct"] = (tab["Criticas"] / tab["Evidencias"].where(tab["Evidencias"] > 0) * 100).fillna(0).round(1)
+            tab["media"] = (tab["Evidencias"] / tab["Laudos"].where(tab["Laudos"] > 0)).fillna(0).round(1)
+            tab = tab.rename(columns={"tecnico": "Técnico", "Evidencias": "Evidências", "Criticas": "Críticas",
+                                      "pct": "% Críticas", "media": "Média evid./laudo", "Custo": "Custo est. (R$)"})
+            st.dataframe(tab, use_container_width=True, hide_index=True)
+            df_sev = df_ev.groupby(["tecnico", "severidade"]).size().reset_index(name="Quantidade")
+            fig = px.bar(df_sev, x="tecnico", y="Quantidade", color="severidade", barmode="stack",
+                         color_discrete_map={"Critico": COR_VERMELHO, "Observacao": COR_AMARELO, "Normal": COR_VERDE},
+                         labels={"tecnico": "Técnico", "severidade": "Severidade"})
+            fig.update_layout(margin=dict(l=0, r=0, t=30, b=0))
+            st.plotly_chart(fig, use_container_width=True)
+
+    with t_site:
+        if df_ev.empty:
+            st.info("Sem evidências para o filtro atual.")
+        else:
+            agg = df_ev.groupby("site_id").agg(
+                Evidencias=("titulo", "size"),
+                Criticas=("severidade", lambda x: int((x == "Critico").sum())),
+                Observacoes=("severidade", lambda x: int((x == "Observacao").sum())),
+                Imediato=("prazo", lambda x: int((x == _PRAZOS_ORD[0]).sum())),
+                Custo=("custo", "sum"))
+            laudos_site = df_f["site_id"].map(lambda v: _txt_ou(v, "—")).value_counts().rename("Laudos").rename_axis("site_id")
+            tab = laudos_site.to_frame().join(agg, how="left").fillna(0).reset_index()
+            for c in ["Evidencias", "Criticas", "Observacoes", "Imediato"]:
+                tab[c] = tab[c].astype(int)
+            tab = tab.sort_values(["Criticas", "Imediato", "Evidencias"], ascending=False).head(15)
+            tab = tab.rename(columns={"site_id": "Site", "Evidencias": "Evidências", "Criticas": "Críticas",
+                                      "Observacoes": "Observações", "Imediato": "SLA imediato", "Custo": "Custo est. (R$)"})
+            st.caption("Top 15 sites por nº de evidências críticas, depois SLA imediato.")
+            st.dataframe(tab, use_container_width=True, hide_index=True)
+
+    with t_cat:
+        if df_ev.empty:
+            st.info("Sem evidências para o filtro atual.")
+        else:
+            cat = df_ev["categoria"].value_counts().rename_axis("Categoria").reset_index(name="Evidências")
+            st.dataframe(cat, use_container_width=True, hide_index=True)
+            s_antes = set(df_ev.loc[df_ev["categoria"] == "Antes", "site_id"])
+            s_depois = set(df_ev.loc[df_ev["categoria"] == "Depois", "site_id"])
+            pend = sorted(s_antes - s_depois, key=str)
+            a1, a2, a3 = st.columns(3)
+            a1.markdown(_card_kpi(len(s_antes), 'SITES COM "ANTES"'), unsafe_allow_html=True)
+            a2.markdown(_card_kpi(len(s_depois), 'SITES COM "DEPOIS"'), unsafe_allow_html=True)
+            a3.markdown(_card_kpi(len(pend), '"ANTES" SEM "DEPOIS"', COR_AMARELO if pend else None), unsafe_allow_html=True)
+            st.caption("Indicador aproximado de correções sem comprovação fotográfica: o app ainda não registra o fechamento de cada pendência.")
+            if pend:
+                st.caption("Sites: " + ", ".join(str(x) for x in pend[:30]))
+
+    with t_status:
+        st_ser = df_f["status_laudo"].map(lambda v: _txt_ou(v, "Não informado")) if "status_laudo" in df_f.columns else None
+        if st_ser is None or st_ser.empty:
+            st.info("Sem dados de status.")
+        else:
+            tab = st_ser.value_counts().rename_axis("Status").reset_index(name="Laudos")
+            tab["%"] = (tab["Laudos"] / tab["Laudos"].sum() * 100).round(1)
+            st.dataframe(tab, use_container_width=True, hide_index=True)
+
+    with t_qual:
+        def _sem_gps(d):
+            if "latitude" not in d.columns or "longitude" not in d.columns:
+                return len(d)
+            la = pd.to_numeric(d["latitude"], errors="coerce")
+            lo = pd.to_numeric(d["longitude"], errors="coerce")
+            return int((la.isna() | lo.isna() | (la == 0) | (lo == 0)).sum())
+        n_sem_data = int(df_f["data_formatada"].isna().sum()) if "data_formatada" in df_f.columns else 0
+        crit = df_ev[df_ev["severidade"] == "Critico"]
+        n_mat_total = int(df_ev["n_materiais"].sum())
+        indicadores = [
+            ("Laudos sem coordenadas GPS", _sem_gps(df_f), n_laudos),
+            ("Laudos sem evidências", n_sem_ev, n_laudos),
+            ("Laudos com data não reconhecida", n_sem_data, n_laudos),
+            ("Evidências críticas sem material informado", int((crit["n_materiais"] == 0).sum()), len(crit)),
+            ("Materiais sem custo unitário", int(df_ev["mat_sem_custo"].sum()), n_mat_total),
+        ]
+        tab = pd.DataFrame(indicadores, columns=["Indicador", "Ocorrências", "Base"])
+        tab["%"] = (tab["Ocorrências"] / tab["Base"].where(tab["Base"] > 0) * 100).fillna(0).round(1)
+        st.dataframe(tab, use_container_width=True, hide_index=True)
+
 def tela_dashboard():
     banner("DASHBOARD")
     with sqlite3.connect(DB_NAME) as conn:
@@ -1282,6 +1466,7 @@ def tela_dashboard():
         return
 
     df['tecnico'] = df['tecnico'].fillna(df['contato'])
+    df['tecnico'] = df['tecnico'].apply(_normalizar_tecnico)
     df['qtd_fotos'] = df['fotos_json'].apply(lambda x: len(json.loads(x or "[]")))
     df['qtd_extras'] = df.get('extras_json', pd.Series(['[]']*len(df))).apply(lambda x: len(json.loads(x or "[]")))
     df['total_imagens'] = df['qtd_fotos'] + df['qtd_extras']
@@ -1292,6 +1477,15 @@ def tela_dashboard():
         df['data_formatada'] = pd.NaT
 
     st.markdown("### 🎛️ Filtros Analíticos")
+    ocultar_teste = st.checkbox('Ocultar registros de teste (técnico com "TESTE" no nome)', value=True, key="dash_ocultar_teste")
+    if ocultar_teste:
+        _eh_teste = df['tecnico'].str.contains('teste', case=False, na=False)
+        if _eh_teste.any():
+            st.caption(f"🧪 {int(_eh_teste.sum())} registro(s) de teste ocultado(s).")
+        df = df[~_eh_teste]
+        if df.empty:
+            st.info("Todos os registros são de teste. Desmarque a opção acima para vê-los.")
+            return
     c_tec, c_site = st.columns(2)
     with c_tec:
         lista_tecnicos = df['tecnico'].dropna().unique().tolist()
@@ -1313,6 +1507,8 @@ def tela_dashboard():
     m3.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{df_filtrado["qtd_fotos"].sum()}</div><div class="eng-metric-label">EVIDÊNCIAS</div></div>', unsafe_allow_html=True)
     m4.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{df_filtrado["qtd_extras"].sum()}</div><div class="eng-metric-label">ANEXOS</div></div>', unsafe_allow_html=True)
 
+    _render_estatisticas(df_filtrado)
+
     # ── Tabela rápida de laudos com Destacar ──────────────────────────────
     st.markdown("<br>", unsafe_allow_html=True)
     with st.expander("📋 Ver todos os laudos — selecionar para destacar", expanded=False):
@@ -1320,7 +1516,7 @@ def tela_dashboard():
         for _, r_res in df_filtrado.iterrows():
             fotos_res  = json.loads(r_res['fotos_json'] or '[]')
             n_crit_res = sum(1 for f in fotos_res if normalizar_sev(f.get('severidade','Normal')) == 'Critico')
-            prazo_res  = next((f.get('prazo_correcao','Monitorar') for f in fotos_res), 'Monitorar')
+            prazo_res  = min((f.get('prazo_correcao','Monitorar') for f in fotos_res), key=lambda p_: _ORDEM_PRAZO.get(p_, 99), default='Monitorar')
             m_res      = _SLA_META.get(prazo_res, _SLA_META["Monitorar"])
             cor_crit   = "#DA291C" if n_crit_res > 0 else "#16A34A"
             btn_res    = _btn_destaque_js(str(r_res['site_id']), prazo_res)
@@ -2038,88 +2234,135 @@ def tela_painel_sla():
         st.info("Nenhum relatório cadastrado.")
         return
 
+    st.markdown("""<style>
+    .sla-card-grid{grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:12px}
+    .sla-card{padding:12px 14px;border-radius:14px;gap:4px;transition:transform .15s,box-shadow .15s}
+    .sla-card:hover{transform:translateY(-2px);box-shadow:0 6px 16px rgba(0,0,0,.12)}
+    .sla-card-titulo{font-size:14px}
+    .painel-header{border-radius:14px;box-shadow:0 4px 14px rgba(0,32,96,.25)}
+    </style>""", unsafe_allow_html=True)
+
     _prazos_ord = ["Imediato (0–24h)", "Urgente (até 7 dias)", "Planejado (até 30 dias)", "Monitorar"]
 
-    col_f1, col_f2, col_f3 = st.columns([1.5, 1.5, 1])
-    with col_f1:
-        prazo_sel = st.selectbox("SLA / Prazo:", ["Todos"] + _prazos_ord, key="sla_painel_prazo")
-    with col_f2:
-        sev_sel = st.selectbox("Severidade:", ["Todas", "Critico", "Observacao", "Normal"], key="sla_painel_sev")
-    with col_f3:
-        auto_refresh = st.checkbox("🔄 Auto-refresh (30s)", key="sla_auto_refresh")
+    with st.expander("⚙️ Opções", expanded=False):
+        o1, o2, o3 = st.columns([1.4, 1.6, 1])
+        with o1:
+            sev_sel = st.selectbox("Severidade:", ["Todas", "Critico", "Observacao", "Normal"], key="sla_painel_sev")
+        with o2:
+            ocultar_teste = st.checkbox("Ocultar registros de teste", value=True, key="sla_ocultar_teste")
+        with o3:
+            auto_refresh = st.checkbox("🔄 Auto-refresh (30s)", key="sla_auto_refresh")
 
-    itens_sla = []
+    itens_sla, n_teste = [], 0
     for _, r_row in df_sla_all.iterrows():
-        for f_item in json.loads(r_row['fotos_json'] or '[]'):
-            prazo_item = f_item.get('prazo_correcao', 'Monitorar')
-            sev_item   = f_item.get('severidade', 'Normal')
-            sev_norm   = normalizar_sev(sev_item)
-            if (prazo_sel == "Todos" or prazo_item == prazo_sel) and \
-               (sev_sel   == "Todas" or sev_norm  == sev_sel):
-                itens_sla.append({
-                    "prazo": prazo_item, "sev": sev_item, "sev_norm": sev_norm,
-                    "site":  r_row['site_id'],
-                    "tecnico": r_row.get('tecnico') or r_row.get('contato','—'),
-                    "data":  r_row.get('data_hora','—'),
-                    "titulo": f_item.get('titulo','Sem título'),
-                    "desc":  f_item.get('comentarios',''),
-                })
+        tec_raw = r_row.get('tecnico')
+        if tec_raw is None or pd.isna(tec_raw) or not str(tec_raw).strip():
+            tec_raw = r_row.get('contato')
+        tec_nome = _normalizar_tecnico(tec_raw)
+        if ocultar_teste and 'teste' in tec_nome.lower():
+            n_teste += 1
+            continue
+        try:
+            fotos_r = json.loads(r_row['fotos_json'] or '[]')
+        except (ValueError, TypeError):
+            fotos_r = []
+        for f_item in fotos_r:
+            sev_item = f_item.get('severidade', 'Normal')
+            sev_norm = normalizar_sev(sev_item)
+            if sev_sel != "Todas" and sev_norm != sev_sel:
+                continue
+            itens_sla.append({
+                "prazo": f_item.get('prazo_correcao', 'Monitorar'), "sev": sev_item, "sev_norm": sev_norm,
+                "site": _txt_ou(r_row.get('site_id'), '—'), "tecnico": tec_nome,
+                "data": r_row.get('data_hora', '—'),
+                "titulo": f_item.get('titulo', 'Sem título'),
+                "desc": f_item.get('comentarios', '') or '',
+            })
 
-    n_imediatos = sum(1 for i in itens_sla if i['prazo'] == "Imediato (0–24h)")
-    alerta_str  = f"⚠️ {n_imediatos} IMEDIATO(S)" if n_imediatos > 0 else "✅ Sem pendências imediatas"
+    cont = {p_: sum(1 for i in itens_sla if i['prazo'] == p_) for p_ in _prazos_ord}
+    n_imed, n_urg = cont[_prazos_ord[0]], cont[_prazos_ord[1]]
+    n_pend = n_imed + n_urg + cont[_prazos_ord[2]]
+    if n_imed:
+        status, fundo = f"⚠️ {n_imed} IMEDIATO(S)", "linear-gradient(90deg,#7f1d1d,#DA291C)"
+    elif n_urg:
+        status, fundo = f"🟠 {n_urg} urgente(s)", "linear-gradient(90deg,#9a3412,#ea580c)"
+    else:
+        status, fundo = "✅ Sem pendências imediatas ou urgentes", "linear-gradient(90deg,#002060,#1d4ed8)"
+    extra_teste = f" &nbsp;|&nbsp; 🧪 {n_teste} laudo(s) de teste oculto(s)" if n_teste else ""
     st.markdown(
-        f'<div class="painel-header"><h2>⏱️ PAINEL SLA — CONTROLE DE PRAZOS</h2>'
-        f'<span>{alerta_str} &nbsp;|&nbsp; {len(itens_sla)} evidência(s) &nbsp;|&nbsp; {datetime.now().strftime("%d/%m/%Y %H:%M")}</span></div>',
+        f'<div class="painel-header" style="background:{fundo};"><h2>⏱️ PAINEL SLA</h2>'
+        f'<span>{status} &nbsp;|&nbsp; {len(itens_sla)} evidência(s){extra_teste} &nbsp;|&nbsp; {datetime.now().strftime("%d/%m/%Y %H:%M")}</span></div>',
         unsafe_allow_html=True
     )
 
-    kpi_cols = st.columns(4)
-    for col_k, prazo_k in zip(kpi_cols, _prazos_ord):
-        cnt_k   = sum(1 for i in itens_sla if i['prazo'] == prazo_k)
-        m_k     = _SLA_META[prazo_k]
-        kpi_cor = _SLA_KPI_COR[prazo_k]
-        kpi_cls = _SLA_KPI_CLS[prazo_k]
-        col_k.markdown(
-            f'<div class="sla-kpi {kpi_cls}" style="margin-bottom:12px;">'
-            f'<div class="sla-kpi-val" style="color:{kpi_cor};">{m_k["icone"]} {cnt_k}</div>'
-            f'<div class="sla-kpi-lbl" style="color:{kpi_cor};">{prazo_k}</div>'
-            f'</div>', unsafe_allow_html=True
-        )
+    _chaves = ["pend", "imediato", "urgente", "planejado", "monitorar", "todos"]
+    _rot = {
+        "pend": f"⚠️ Pendências ({n_pend})",
+        "imediato": f"{_SLA_META[_prazos_ord[0]]['icone']} Imediato ({n_imed})",
+        "urgente": f"{_SLA_META[_prazos_ord[1]]['icone']} Urgente ({n_urg})",
+        "planejado": f"{_SLA_META[_prazos_ord[2]]['icone']} Planejado ({cont[_prazos_ord[2]]})",
+        "monitorar": f"{_SLA_META[_prazos_ord[3]]['icone']} Monitorar ({cont[_prazos_ord[3]]})",
+        "todos": f"Todos ({len(itens_sla)})",
+    }
+    _filtro = {"pend": _prazos_ord[:3], "imediato": _prazos_ord[:1], "urgente": _prazos_ord[1:2],
+               "planejado": _prazos_ord[2:3], "monitorar": _prazos_ord[3:], "todos": None}
+    if hasattr(st, "pills"):
+        visao = st.pills("Visualizar", _chaves, default="pend", format_func=lambda k: _rot[k], key="sla_visao", label_visibility="collapsed")
+    else:
+        visao = st.radio("Visualizar", _chaves, format_func=lambda k: _rot[k], horizontal=True, key="sla_visao", label_visibility="collapsed")
+    visao = visao or "pend"
 
-    if not itens_sla:
-        st.info("Nenhuma evidência para os filtros selecionados.")
+    if st.session_state.get("_sla_visao_ant") != visao:
+        st.session_state["_sla_visao_ant"] = visao
+        st.session_state["sla_limite"] = 24
+    lim = st.session_state.get("sla_limite", 24)
+
+    alvo = _filtro[visao]
+    ordem_prazo = {p_: i for i, p_ in enumerate(_prazos_ord)}
+    sel = sorted([i for i in itens_sla if alvo is None or i['prazo'] in alvo], key=lambda x: ordem_prazo.get(x['prazo'], 99))
+
+    if not sel:
+        if visao == "pend":
+            st.success("✅ Nenhuma pendência com prazo ativo. Escolha **Monitorar** para ver os itens em observação.")
+        else:
+            st.info("Nenhuma evidência nesta visualização.")
     else:
         _prazo_cls = {
-            "Imediato (0–24h)":       ("sla-card-imediato","pill-imediato"),
+            "Imediato (0–24h)":       ("sla-card-imediato", "pill-imediato"),
             "Urgente (até 7 dias)":   ("sla-card-urgente", "pill-urgente"),
-            "Planejado (até 30 dias)":("sla-card-planejado","pill-planejado"),
-            "Monitorar":              ("sla-card-monitorar","pill-monitorar"),
+            "Planejado (até 30 dias)": ("sla-card-planejado", "pill-planejado"),
+            "Monitorar":              ("sla-card-monitorar", "pill-monitorar"),
         }
-        _sev_cls = {"Critico":"pill-critico","Observacao":"pill-observacao","Normal":"pill-normal"}
-        ordem_prazo = {p: i for i, p in enumerate(_prazos_ord)}
-        itens_sorted = sorted(itens_sla, key=lambda x: ordem_prazo.get(x['prazo'], 99))
-
+        _sev_cls = {"Critico": "pill-critico", "Observacao": "pill-observacao", "Normal": "pill-normal"}
         cards_html = '<div class="sla-card-grid">'
-        for item in itens_sorted:
-            card_cls, pill_cls = _prazo_cls.get(item['prazo'], ("sla-card-monitorar","pill-monitorar"))
-            sev_pill = _sev_cls.get(item['sev_norm'], "pill-normal")
-            m_card   = _SLA_META.get(item['prazo'], _SLA_META["Monitorar"])
-            desc_t   = sanitizar(item['desc'][:120]) + ("…" if len(item['desc']) > 120 else "")
-            btn_d    = _btn_destaque_js(item['site'], item['prazo'], item['titulo'])
+        for item in sel[:lim]:
+            card_cls, pill_cls = _prazo_cls.get(item['prazo'], ("sla-card-monitorar", "pill-monitorar"))
+            m_card = _SLA_META.get(item['prazo'], _SLA_META["Monitorar"])
+            desc = str(item['desc']).strip()
+            if desc.upper() in ("N/A", "NA", "-", "—"):
+                desc = ""
+            desc_html = f'<div class="sla-card-desc">{sanitizar(desc[:110])}{"…" if len(desc) > 110 else ""}</div>' if desc else ""
+            sev_html = "" if item['sev_norm'] == "Normal" else f'<span class="sla-pill {_sev_cls.get(item["sev_norm"], "pill-normal")}">{sanitizar(item["sev"])}</span>'
+            btn_d = _btn_destaque_js(item['site'], item['prazo'], item['titulo'])
             cards_html += (
                 f'<div class="sla-card {card_cls}">'
-                f'<div class="sla-card-site">📍 {sanitizar(item["site"])} · 👷 {sanitizar(str(item["tecnico"]))}</div>'
+                f'<div class="sla-card-site">📍 {sanitizar(str(item["site"]))} · 👷 {sanitizar(str(item["tecnico"]))}</div>'
                 f'<div class="sla-card-titulo">{sanitizar(item["titulo"])}</div>'
-                f'<div class="sla-card-desc">{desc_t}</div>'
+                f'{desc_html}'
                 f'<div class="sla-card-footer">'
                 f'<span class="sla-pill {pill_cls}">{m_card["icone"]} {sanitizar(item["prazo"])}</span>'
-                f'<span class="sla-pill {sev_pill}">{sanitizar(item["sev"])}</span>'
+                f'{sev_html}'
                 f'<span style="font-size:11px;color:#94a3b8;">{sanitizar(str(item["data"]))}</span>'
                 f'{btn_d}'
                 f'</div></div>'
             )
         cards_html += '</div>'
         st.markdown(cards_html, unsafe_allow_html=True)
+        if len(sel) > lim:
+            st.caption(f"Mostrando {lim} de {len(sel)}.")
+            if st.button(f"Mostrar mais ({min(24, len(sel) - lim)})", key="sla_mais"):
+                st.session_state["sla_limite"] = lim + 24
+                st.rerun()
 
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown(
