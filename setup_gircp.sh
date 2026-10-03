@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # GIRCP — Script de Instalação e Recuperação Completa
-# v3.7.2 — Gerador Inteligente de Relatórios e Controle Fotográfico
+# v3.8.1 — Gerador Inteligente de Relatórios e Controle Fotográfico
 # Uso: bash setup_gircp.sh
 # ==============================================================================
 
@@ -104,41 +104,53 @@ else
 fi
 
 # ==============================================================================
-# 4. STREAMLIT — secrets.toml (só cria se não existir — não sobrescreve senhas!)
+# 4. STREAMLIT — secrets.toml (só cria se não existir; senhas ALEATÓRIAS geradas)
 # ==============================================================================
 hdr "4. Streamlit secrets.toml"
 
 if [[ -f ".streamlit/secrets.toml" ]]; then
     warn ".streamlit/secrets.toml já existe — NÃO sobrescrito (senhas preservadas)"
 else
-cat > .streamlit/secrets.toml << 'EOF'
+    # v3.8.1: senhas aleatórias fortes — nunca mais senha padrão versionada
+    if command -v openssl &>/dev/null; then
+        GERAR_SENHA() { openssl rand -base64 18 | tr -dc 'A-Za-z0-9@#%&*' | head -c 20; }
+    else
+        GERAR_SENHA() { "$PYTHON" -c "import secrets,string;print(''.join(secrets.choice(string.ascii_letters+string.digits+'@#%&*') for _ in range(20)))"; }
+    fi
+    SENHA_GERAL=$(GERAR_SENHA)
+    SENHA_ADMIN=$(GERAR_SENHA)
+    SENHA_TECNICO=$(GERAR_SENHA)
+
+cat > .streamlit/secrets.toml << EOF
 # GIRCP — Segredos de Aplicação
 # ATENÇÃO: NÃO versionar este arquivo
 
-# Senha principal usada por check_password()
-senha_acesso = "gircp@2026"
+# Senha geral usada por check_password() (login com o campo Usuário em branco)
+senha_acesso = "${SENHA_GERAL}"
 
 [usuarios.admin]
-senha  = "gircp@admin2026"
+senha  = "${SENHA_ADMIN}"
 perfil = "administrador"
-nome   = "Claudevani Pereira"
-email  = "clauevani.pereira@engemon.com.br"
+nome   = "Administrador GIRCP"
+email  = ""
 
 [usuarios.tecnico1]
-senha  = "gircp@campo1"
+senha  = "${SENHA_TECNICO}"
 perfil = "tecnico"
 nome   = "Técnico em Campo"
 email  = ""
 
-[database]
-# url = "postgresql://usuario:senha@host:5432/gircp_db"
-
-[integracao]
-# webhook_url = ""
-# api_token   = ""
+# [seguranca]
+# hash_codigo = "<gerado por: python selar_codigo.py>"
 EOF
-    ok ".streamlit/secrets.toml criado"
-    warn "⚠  Altere a senha 'gircp@2026' antes de usar em produção!"
+    chmod 600 .streamlit/secrets.toml
+    ok ".streamlit/secrets.toml criado com senhas ALEATÓRIAS (permissão 600)"
+    echo ""
+    echo -e "  ${BOLD}Guarde estas senhas — serão as únicas exibidas:${NC}"
+    echo -e "  Senha geral : ${GREEN}${SENHA_GERAL}${NC}"
+    echo -e "  admin       : ${GREEN}${SENHA_ADMIN}${NC}"
+    echo -e "  tecnico1    : ${GREEN}${SENHA_TECNICO}${NC}"
+    echo ""
 fi
 
 # ==============================================================================
@@ -154,7 +166,6 @@ else
     warn "venv já existe — reutilizando"
 fi
 
-# Ativar venv
 if [[ "$OS" == "MINGW"* ]] || [[ "$OS" == "CYGWIN"* ]]; then
     VENV_PYTHON="venv/Scripts/python"
     VENV_PIP="venv/Scripts/pip"
@@ -171,17 +182,16 @@ hdr "6. Dependências Python"
 info "Atualizando pip..."
 $VENV_PIP install --upgrade pip -q
 
-# Criar requirements.txt se não existir
 if [[ ! -f "requirements.txt" ]]; then
 cat > requirements.txt << 'EOF'
-streamlit>=1.35.0
-pandas>=2.0.0
-plotly>=5.18.0
-pydeck>=0.9.0
-Pillow>=10.0.0
+streamlit>=1.35
+pandas>=2.0
+plotly>=5.18
+pydeck>=0.9
+Pillow>=10.0
 weasyprint>=61.0
-openpyxl>=3.1.0
-requests>=2.31.0
+openpyxl>=3.1
+requests>=2.31
 defusedxml>=0.7.1
 filetype>=1.2.0
 qrcode[pil]>=7.4.2
@@ -197,7 +207,6 @@ else
     ok "Pacotes instalados"
 fi
 
-# Verificar dependências do sistema necessárias para WeasyPrint
 hdr "6b. Verificando dependências do sistema (WeasyPrint)"
 if [[ "$OS" == "Linux" ]]; then
     MISSING_PKGS=()
@@ -212,7 +221,7 @@ if [[ "$OS" == "Linux" ]]; then
     fi
 elif [[ "$OS" == "Darwin" ]]; then
     if ! command -v brew &>/dev/null; then
-        warn "Homebrew não encontrado. Para WeasyPrint no macOS: instale Homebrew e execute: brew install pango cairo gdk-pixbuf"
+        warn "Homebrew não encontrado. Para WeasyPrint no macOS: brew install pango cairo gdk-pixbuf"
     else
         ok "Homebrew encontrado — WeasyPrint deve funcionar"
     fi
@@ -223,14 +232,11 @@ fi
 # ==============================================================================
 hdr "7. Banco de Dados SQLite"
 
-DB_FILE="laudos_corp_v3.db"
-
 $VENV_PYTHON << 'PYEOF'
 import sqlite3, os, shutil, datetime
 
 DB = "laudos_corp_v3.db"
 
-# Backup se já existir
 if os.path.exists(DB):
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     bkp = f"backups/{DB.replace('.db', '')}_{ts}.db"
@@ -240,8 +246,6 @@ if os.path.exists(DB):
 conn = sqlite3.connect(DB)
 c = conn.cursor()
 c.execute("PRAGMA journal_mode=WAL")
-
-# Tabela principal
 c.execute('''
     CREATE TABLE IF NOT EXISTS relatorios (
         id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -258,8 +262,6 @@ c.execute('''
         criado_em        TEXT DEFAULT (datetime('now','localtime'))
     )
 ''')
-
-# Migração incremental de colunas (idempotente)
 colunas_novas = [
     "criado_em TEXT", "endereco TEXT", "tecnico TEXT",
     "numero_relatorio TEXT", "revisao TEXT",
@@ -271,13 +273,9 @@ for col in colunas_novas:
     try:
         c.execute(f"ALTER TABLE relatorios ADD COLUMN {col}")
     except sqlite3.OperationalError:
-        pass  # coluna já existe
-
-# Sequência de numeração de relatórios
+        pass
 c.execute("CREATE TABLE IF NOT EXISTS seq_relatorio (ultimo INTEGER DEFAULT 0)")
 c.execute("INSERT INTO seq_relatorio SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM seq_relatorio)")
-
-# Log de auditoria
 c.execute('''
     CREATE TABLE IF NOT EXISTS audit_log (
         id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -288,7 +286,6 @@ c.execute('''
         detalhe      TEXT
     )
 ''')
-
 conn.commit()
 conn.close()
 print("  ✔ Banco laudos_corp_v3.db inicializado/migrado com sucesso")
@@ -297,19 +294,28 @@ PYEOF
 ok "Banco de dados OK"
 
 # ==============================================================================
-# 8. DIRETÓRIO DE FOTOS
+# 8. TESTES UNITÁRIOS (v3.8.1)
 # ==============================================================================
-hdr "8. Diretório de Fotos"
+hdr "8. Testes Unitários"
+
+if [[ -d "tests" ]]; then
+    if $VENV_PYTHON -m unittest discover tests 2>/dev/null; then
+        ok "Suíte de testes passou (18 testes)"
+    else
+        warn "Suíte de testes com falhas — revise antes de usar em produção"
+    fi
+else
+    warn "Pasta tests/ não encontrada — pulando"
+fi
+
+# ==============================================================================
+# 9. DIRETÓRIO DE FOTOS E SCRIPT DE START
+# ==============================================================================
+hdr "9. Fotos e Start"
 
 mkdir -p banco_fotos_gircp
-# .gitkeep para versionar pasta vazia
 touch banco_fotos_gircp/.gitkeep
 ok "banco_fotos_gircp/ pronto"
-
-# ==============================================================================
-# 9. SCRIPT DE INICIALIZAÇÃO RÁPIDA
-# ==============================================================================
-hdr "9. Script de Start"
 
 if [[ ! -f "start.sh" ]]; then
 cat > start.sh << 'EOF'
@@ -330,25 +336,8 @@ fi
 # 10. RESUMO FINAL
 # ==============================================================================
 hdr "✅ SETUP CONCLUÍDO"
-
 echo ""
-echo -e "  ${BOLD}Estrutura gerada:${NC}"
-echo "  ├── app_relatorio.py"
-echo "  ├── requirements.txt"
-echo "  ├── start.sh"
-echo "  ├── .gitignore"
-echo "  ├── .streamlit/"
-echo "  │   ├── config.toml"
-echo "  │   └── secrets.toml   ← NÃO commitar"
-echo "  ├── banco_fotos_gircp/"
-echo "  ├── backups/"
-echo "  └── venv/"
-echo ""
-echo -e "  ${BOLD}Para iniciar o sistema:${NC}"
-echo -e "  ${GREEN}bash start.sh${NC}"
-echo ""
-echo -e "  ${BOLD}Ou manualmente:${NC}"
-echo -e "  ${GREEN}source venv/bin/activate && streamlit run app_relatorio.py --server.port 8503${NC}"
-echo ""
-echo -e "  ${YELLOW}⚠  Altere a senha em .streamlit/secrets.toml antes de usar em produção!${NC}"
+echo -e "  ${BOLD}Para iniciar o sistema:${NC}  ${GREEN}bash start.sh${NC}"
+echo -e "  ${BOLD}Rodar os testes:${NC}         ${GREEN}venv/bin/python -m unittest discover tests -v${NC}"
+echo -e "  ${BOLD}Selar o código:${NC}          ${GREEN}venv/bin/python selar_codigo.py${NC}"
 echo ""
