@@ -1,6 +1,6 @@
 """
 GIRCP — Gerador Inteligente de Relatórios e Controle Fotográfico
-| v3.7.2 (Sprints 1, 2, 3 + Ajustes Visuais de Layout PDF + SecOps)
+| v3.8.1 (Fixes de Robustez, Concorrência, Testabilidade)
 """
 
 import streamlit as st
@@ -23,6 +23,7 @@ import qrcode
 import threading
 import subprocess
 import urllib.parse
+import re
 from datetime import datetime, timedelta
 from PIL import Image
 from weasyprint import HTML, default_url_fetcher
@@ -33,6 +34,21 @@ from openpyxl.utils import get_column_letter
 # ==============================================================================
 # 0. CONTROLE DE ACESSO E SEGURANÇA (LGPD & ANTI-MALWARE)
 # ==============================================================================
+_MALWARE_LOCK = threading.Lock()
+_MALWARE_ALERTAS: list[str] = []
+
+def _empilhar_alerta_malware(nome_arquivo: str) -> None:
+    """Thread-safe: chamado pelo scanner em background; nunca toca no session_state."""
+    with _MALWARE_LOCK:
+        _MALWARE_ALERTAS.append(nome_arquivo)
+
+def _drenar_alertas_malware() -> list[str]:
+    """Thread-safe: consome a fila no fluxo principal (rerun) e a esvazia."""
+    with _MALWARE_LOCK:
+        alertas = list(_MALWARE_ALERTAS)
+        _MALWARE_ALERTAS.clear()
+    return alertas
+
 def scan_malware_async(file_path: str):
     """
     Executa varredura assíncrona com ClamAV.
@@ -48,10 +64,8 @@ def scan_malware_async(file_path: str):
                 except OSError:
                     pass
                 registrar_auditoria("seguranca_malware_bloqueado", detalhe=f"Arquivo suspeito deletado: {file_path}")
-                # Sinaliza para o próximo rerun exibir aviso — session_state é thread-safe para escrita simples
-                if "_malware_alertas" not in st.session_state:
-                    st.session_state["_malware_alertas"] = []
-                st.session_state["_malware_alertas"].append(os.path.basename(file_path))
+                # Fila protegida por lock; o session_state é acessado só no fluxo principal
+                _empilhar_alerta_malware(os.path.basename(file_path))
         except Exception as exc:
             # Falha no scan não deve derrubar o app, mas deve ser registrada
             try:
@@ -137,6 +151,9 @@ OPT_DIGITAR_MANUAL = "-- Digitar Manualmente --"
 OPT_SELECIONE = "-- SELECIONE --"
 
 os.makedirs(FOTOS_DIR, exist_ok=True)
+
+# Coordenadas da base operacional padrão (Barueri/SP) — ajuste para sua região
+ROTA_PARTIDA_PADRAO = "-23.5051209,-46.8109935"
 
 def init_db():
     with sqlite3.connect(DB_NAME) as conn:
@@ -265,6 +282,8 @@ def _validar_upload(nome_arquivo: str, raw: bytes) -> str | None:
     Valida magic bytes e tamanho do arquivo.
     Retorna mensagem de erro (str) se inválido, None se OK.
     """
+    if not raw:
+        return f"'{sanitizar(nome_arquivo)}' está vazio (0 bytes). Upload rejeitado."
     if len(raw) > _UPLOAD_MAX_BYTES:
         return f"'{sanitizar(nome_arquivo)}' excede o limite de 20 MB ({len(raw)//1024//1024} MB). Upload rejeitado."
     tipo_real = filetype.guess(raw)
@@ -546,15 +565,20 @@ def gerar_pdf(dados: dict, fotos: list, extras: list = None) -> tuple[bytes, str
 
     nome = f"Relatorio_{sanitizar(dados.get('site_id','SITE')).replace(' ','_')}_{datetime.now().strftime('%Y%m%d%H%M%S')}.pdf"
 
-    # Gera o PDF uma única vez com placeholder temporário, calcula o hash do conteúdo,
-    # e substitui diretamente nos bytes do PDF (evita re-renderização completa com WeasyPrint).
+    # Gera o PDF uma única vez com placeholder temporário e calcula o hash do conteúdo.
+    # Tenta injetar o hash diretamente nos bytes (sem re-renderizar); se o stream de texto
+    # estiver comprimido (FlateDecode) o placeholder não aparece em bytes claros e o
+    # fallback re-renderiza com o hash real — antes o replace falhava em silêncio.
     html_com_placeholder = html_raw.replace("HASH_PLACEHOLDER", "Calculando...")
     pdf_bytes = HTML(string=html_com_placeholder, url_fetcher=_url_fetcher_seguro).write_pdf()
     hash_doc = hashlib.sha256(pdf_bytes).hexdigest()
-    # Substitui a string do placeholder diretamente nos bytes sem re-renderizar
+    hash_str = f"SHA-256: {hash_doc[:16]}"
     placeholder_bytes = b"Calculando..."
-    hash_bytes = f"SHA-256: {hash_doc[:16]}".encode()
-    pdf_bytes_final = pdf_bytes.replace(placeholder_bytes, hash_bytes, 1)
+    if placeholder_bytes in pdf_bytes:
+        pdf_bytes_final = pdf_bytes.replace(placeholder_bytes, hash_str.encode(), 1)
+    else:
+        html_final = html_raw.replace("HASH_PLACEHOLDER", hash_str)
+        pdf_bytes_final = HTML(string=html_final, url_fetcher=_url_fetcher_seguro).write_pdf()
 
     return pdf_bytes_final, nome
 
@@ -1286,10 +1310,9 @@ _ALIAS_TECNICO = {}
 
 def _normalizar_tecnico(v):
     """Remove o registro (CRT/CREA/CFT) do nome e padroniza a caixa, para agrupar o mesmo tecnico."""
-    import re as _re
     if v is None or pd.isna(v) or not str(v).strip():
         return "Sem técnico"
-    nome = _re.split(r"\s*[-–—,;(]?\s*(?:CRT|CREA|CFT)\b", str(v).strip(), maxsplit=1, flags=_re.IGNORECASE)[0]
+    nome = re.split(r"\s*[-–—,;(]?\s*(?:CRT|CREA|CFT)\b", str(v).strip(), maxsplit=1, flags=re.IGNORECASE)[0]
     nome = " ".join(nome.split()).strip(" -–—,;:")
     if not nome:
         return "Sem técnico"
@@ -1587,7 +1610,7 @@ def tela_dashboard():
         for _, r in df_filtrado.iterrows():
             for foto in json.loads(r['fotos_json'] or "[]"):
                 sev = foto.get('severidade', 'Normal')
-                sev_norm = {'Crítico': 'Critico', 'Observação': 'Observacao'}.get(sev, sev)
+                sev_norm = normalizar_sev(sev)
                 severidades[sev_norm] = severidades.get(sev_norm, 0) + 1
         
         df_sev = pd.DataFrame(list(severidades.items()), columns=['Severidade', 'Quantidade'])
@@ -1720,9 +1743,7 @@ def tela_dashboard():
         for _, row_m in df_mapa.iterrows():
             fotos_row = json.loads(row_m['fotos_json'] or '[]')
             tem_critico = any(
-                {'Crítico': 'Critico', 'Observação': 'Observacao'}.get(
-                    f.get('severidade', 'Normal'), f.get('severidade', 'Normal')
-                ) == 'Critico'
+                normalizar_sev(f.get('severidade', 'Normal')) == 'Critico'
                 for f in fotos_row
             )
             tem_critico_lista.append(tem_critico)
@@ -1941,7 +1962,7 @@ def geocodificar_endereco(endereco):
         )
         r.raise_for_status()
         dados = r.json()
-        if dados:
+        if isinstance(dados, list) and dados:
             return float(dados[0]["lat"]), float(dados[0]["lon"])
     except Exception:
         pass
@@ -1968,7 +1989,7 @@ def tela_roteirizacao():
     st.markdown("### 📍 Configuração da Rota")
     c_base, c_sites = st.columns(2)
     with c_base:
-        partida_txt = st.text_input("Ponto de Partida (Base/Hotel) — coordenadas (lat,lon) ou endereço:", value="-23.5051209,-46.8109935", key="rota_ponto_partida")
+        partida_txt = st.text_input("Ponto de Partida (Base/Hotel) — coordenadas (lat,lon) ou endereço:", value=ROTA_PARTIDA_PADRAO, key="rota_ponto_partida")
     with c_sites:
         sites_alvo = st.multiselect("Selecione os Sites a Visitar:", lista_opcoes)
         
@@ -2372,9 +2393,8 @@ def tela_painel_sla():
         unsafe_allow_html=True
     )
     if auto_refresh:
-        import time
-        time.sleep(30)
-        st.rerun()
+        # Meta refresh: recarrega a página sem segurar um worker do Streamlit por 30 s
+        st.markdown('<meta http-equiv="refresh" content="30">', unsafe_allow_html=True)
 
 def gerar_pdf_rota(rota_otimizada, distancia_km, duracao_seg, tecnico, evidencias_por_site) -> tuple[bytes, str]:
     densidade = len(rota_otimizada[1:]) / distancia_km if distancia_km > 0 else 0
@@ -2566,158 +2586,165 @@ def gerar_excel_rota(rota_otimizada, distancia_km, duracao_seg, tecnico, evidenc
     nome = f"Roteiro_{datetime.now().strftime('%Y%m%d%H%M%S')}.xlsx"
     return buf.getvalue(), nome
 
-st.set_page_config(page_title="GIRCP | Controle Fotográfico", page_icon="⚡", layout="wide", initial_sidebar_state="expanded")
+def main() -> None:
+    """Ponto de entrada do app (executado a cada rerun do Streamlit)."""
+    st.set_page_config(page_title="GIRCP | Controle Fotográfico", page_icon="⚡", layout="wide", initial_sidebar_state="expanded")
 
-verificar_integridade_codigo()
+    verificar_integridade_codigo()
 
-if not check_password():
-    st.stop()
+    if not check_password():
+        st.stop()
 
-init_db()
-aplicar_estilo()
+    init_db()
+    aplicar_estilo()
 
-# Exibe alertas de malware detectados em varreduras assíncronas anteriores
-if st.session_state.get("_malware_alertas"):
-    for _nome_susp in st.session_state.pop("_malware_alertas"):
-        st.error(f"🚨 SEGURANÇA: Arquivo suspeito bloqueado e removido — **{sanitizar(_nome_susp)}**. "
-                 "Faça novo upload com um arquivo válido.")
+    # Exibe alertas de malware detectados em varreduras assíncronas anteriores
+    _alertas_malware = _drenar_alertas_malware()
+    if _alertas_malware:
+        for _nome_susp in _alertas_malware:
+            st.error(f"🚨 SEGURANÇA: Arquivo suspeito bloqueado e removido — **{sanitizar(_nome_susp)}**. "
+                     "Faça novo upload com um arquivo válido.")
 
-# ── Interceptar modo destaque via query params ─────────────────────────────
-_qp = st.query_params
-if _qp.get("destaque"):
-    _site_d  = _qp.get("destaque", "")
-    _prazo_d = _qp.get("prazo", "")
-    _ev_d    = _qp.get("ev", "")   # título da evidência (opcional)
+    # ── Interceptar modo destaque via query params ─────────────────────────────
+    _qp = st.query_params
+    if _qp.get("destaque"):
+        _site_d  = _qp.get("destaque", "")
+        _prazo_d = _qp.get("prazo", "")
+        _ev_d    = _qp.get("ev", "")   # título da evidência (opcional)
 
-    # CSS tela cheia — sem sidebar, sem header
-    st.markdown("""<style>
-    [data-testid="stSidebar"],[data-testid="stHeader"],[data-testid="stToolbar"]
-        { display:none !important; }
-    .block-container { padding:0 !important; max-width:100% !important; }
-    </style>""", unsafe_allow_html=True)
+        # CSS tela cheia — sem sidebar, sem header
+        st.markdown("""<style>
+        [data-testid="stSidebar"],[data-testid="stHeader"],[data-testid="stToolbar"]
+            { display:none !important; }
+        .block-container { padding:0 !important; max-width:100% !important; }
+        </style>""", unsafe_allow_html=True)
 
-    # Buscar dados atualizados do banco
-    with sqlite3.connect(DB_NAME) as _conn_d:
-        _rows_d = _conn_d.execute(
-            "SELECT * FROM relatorios WHERE TRIM(UPPER(site_id))=TRIM(UPPER(?)) ORDER BY id DESC LIMIT 1",
-            (_site_d,)
-        ).fetchone()
-        _cols_d = [d[0] for d in _conn_d.execute("SELECT * FROM relatorios LIMIT 0").description]
+        # Buscar dados atualizados do banco
+        with sqlite3.connect(DB_NAME) as _conn_d:
+            _rows_d = _conn_d.execute(
+                "SELECT * FROM relatorios WHERE TRIM(UPPER(site_id))=TRIM(UPPER(?)) ORDER BY id DESC LIMIT 1",
+                (_site_d,)
+            ).fetchone()
+            _cols_d = [d[0] for d in _conn_d.execute("SELECT * FROM relatorios LIMIT 0").description]
 
-    _m_d  = _SLA_META.get(_prazo_d, _SLA_META["Monitorar"])
-    _cor_d = _SLA_KPI_COR.get(_prazo_d, "#64748B")
+        _m_d  = _SLA_META.get(_prazo_d, _SLA_META["Monitorar"])
+        _cor_d = _SLA_KPI_COR.get(_prazo_d, "#64748B")
 
-    _fotos_d = []
-    if _rows_d:
-        _row_dict = dict(zip(_cols_d, _rows_d))
-        _fotos_d  = json.loads(_row_dict.get('fotos_json') or '[]')
-        if _prazo_d:
-            _fotos_d = [f for f in _fotos_d if f.get('prazo_correcao','Monitorar') == _prazo_d]
-        if _ev_d:
-            _fotos_d = [f for f in _fotos_d if f.get('titulo','') == _ev_d] or _fotos_d
+        _fotos_d = []
+        if _rows_d:
+            _row_dict = dict(zip(_cols_d, _rows_d))
+            _fotos_d  = json.loads(_row_dict.get('fotos_json') or '[]')
+            if _prazo_d:
+                _fotos_d = [f for f in _fotos_d if f.get('prazo_correcao','Monitorar') == _prazo_d]
+            if _ev_d:
+                _fotos_d = [f for f in _fotos_d if f.get('titulo','') == _ev_d] or _fotos_d
 
-    _n_ev_d = len(_fotos_d)
+        _n_ev_d = len(_fotos_d)
 
-    # Header do destaque
-    st.markdown(f"""
-    <div style="background:#002060;color:#fff;padding:20px 32px 16px;display:flex;
-        justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;min-height:80px;">
-      <div>
-        <div style="font-size:clamp(22px,4vw,40px);font-weight:900;letter-spacing:1px;">
-          {_m_d['icone']} {sanitizar(_site_d)}
-        </div>
-        <div style="font-size:clamp(13px,2vw,18px);opacity:.8;margin-top:4px;">
-          SLA: <strong style="color:{_cor_d};">{sanitizar(_prazo_d or 'Todos')}</strong>
-          &nbsp;·&nbsp; {_n_ev_d} evidência(s)
-          &nbsp;·&nbsp; Atualizado: {datetime.now().strftime('%H:%M:%S')}
-        </div>
-      </div>
-      <div style="font-size:clamp(28px,5vw,52px);font-weight:900;color:{_cor_d};">
-        {_m_d['icone']}
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    if not _fotos_d:
+        # Header do destaque
         st.markdown(f"""
-        <div style="display:flex;align-items:center;justify-content:center;height:60vh;
-            font-size:clamp(18px,3vw,32px);color:#94a3b8;flex-direction:column;gap:16px;">
-          <div>📭</div>
-          <div>Nenhuma evidência encontrada para<br><strong>{sanitizar(_site_d)}</strong></div>
+        <div style="background:#002060;color:#fff;padding:20px 32px 16px;display:flex;
+            justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;min-height:80px;">
+          <div>
+            <div style="font-size:clamp(22px,4vw,40px);font-weight:900;letter-spacing:1px;">
+              {_m_d['icone']} {sanitizar(_site_d)}
+            </div>
+            <div style="font-size:clamp(13px,2vw,18px);opacity:.8;margin-top:4px;">
+              SLA: <strong style="color:{_cor_d};">{sanitizar(_prazo_d or 'Todos')}</strong>
+              &nbsp;·&nbsp; {_n_ev_d} evidência(s)
+              &nbsp;·&nbsp; Atualizado: {datetime.now().strftime('%H:%M:%S')}
+            </div>
+          </div>
+          <div style="font-size:clamp(28px,5vw,52px);font-weight:900;color:{_cor_d};">
+            {_m_d['icone']}
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        if not _fotos_d:
+            st.markdown(f"""
+            <div style="display:flex;align-items:center;justify-content:center;height:60vh;
+                font-size:clamp(18px,3vw,32px);color:#94a3b8;flex-direction:column;gap:16px;">
+              <div>📭</div>
+              <div>Nenhuma evidência encontrada para<br><strong>{sanitizar(_site_d)}</strong></div>
+            </div>""", unsafe_allow_html=True)
+        else:
+            _prazo_bg = {
+                "Imediato (0–24h)":       "#fff1f0",
+                "Urgente (até 7 dias)":   "#fff7ed",
+                "Planejado (até 30 dias)":"#eff6ff",
+                "Monitorar":              "#f8fafc",
+            }
+            for _f_d in _fotos_d:
+                _sev_f   = _f_d.get('severidade','Normal')
+                _cor_sev = _SEV_COR.get(_sev_f, "#16A34A")
+                _bg_card = _prazo_bg.get(_f_d.get('prazo_correcao','Monitorar'), "#f8fafc")
+                _mats_f  = _f_d.get('materiais') or []
+                _mat_str = ", ".join(m.get('descricao','') for m in _mats_f if m.get('descricao','').strip()) or "—"
+
+                _col_img_d, _col_info_d = st.columns([1, 2])
+                _b64_d = _obter_b64_de_foto(_f_d)
+                if _b64_d:
+                    _col_img_d.markdown(
+                        f'<img src="data:image/jpeg;base64,{_b64_d}" '
+                        f'style="width:100%;border-radius:10px;border:4px solid {_cor_sev};'
+                        f'box-shadow:0 4px 20px rgba(0,0,0,.18);" />',
+                        unsafe_allow_html=True
+                    )
+
+                with _col_info_d:
+                    st.markdown(f"""
+                    <div style="background:{_bg_card};border-left:8px solid {_cor_sev};
+                        border-radius:10px;padding:clamp(16px,2vw,28px);height:100%;">
+                      <div style="font-size:clamp(18px,3vw,30px);font-weight:800;color:#1e293b;margin-bottom:10px;">
+                        {sanitizar(_f_d.get('titulo','Evidência'))}
+                      </div>
+                      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+                        <span style="background:{_cor_sev};color:#fff;padding:4px 14px;
+                            border-radius:20px;font-size:clamp(12px,1.5vw,16px);font-weight:700;">
+                          {sanitizar(_sev_f)}
+                        </span>
+                        <span style="background:{_cor_d};color:#fff;padding:4px 14px;
+                            border-radius:20px;font-size:clamp(12px,1.5vw,16px);font-weight:700;">
+                          {_m_d['icone']} {sanitizar(_f_d.get('prazo_correcao','Monitorar'))}
+                        </span>
+                      </div>
+                      <div style="font-size:clamp(14px,2vw,20px);color:#334155;line-height:1.6;margin-bottom:14px;">
+                        {sanitizar(_f_d.get('comentarios',''))}
+                      </div>
+                      <div style="font-size:clamp(12px,1.5vw,16px);color:#DA291C;font-weight:600;">
+                        🔧 Material: {sanitizar(_mat_str)}
+                      </div>
+                    </div>""", unsafe_allow_html=True)
+
+                st.markdown("<hr style='margin:20px 0;border-color:#e2e8f0;'>", unsafe_allow_html=True)
+
+        # Auto-refresh a cada 30s
+        st.markdown("""
+        <script>setTimeout(()=>location.reload(), 30000);</script>
+        """, unsafe_allow_html=True)
+        st.stop()
+
+    # ── Roteamento normal ──────────────────────────────────────────────────────
+    with st.sidebar:
+        st.markdown("""
+        <div style="text-align:center;padding:20px 0 10px 0;">
+          <div style="font-size:42px;">⚡</div>
+          <div style="font-size:27px;font-weight:900;letter-spacing:1.5px;color:#fff;">GIRCP</div>
+          <div style="font-size:15px;opacity:0.65;color:#fff;margin-top:2px;">SISTEMA CORPORATIVO</div>
         </div>""", unsafe_allow_html=True)
-    else:
-        _prazo_bg = {
-            "Imediato (0–24h)":       "#fff1f0",
-            "Urgente (até 7 dias)":   "#fff7ed",
-            "Planejado (até 30 dias)":"#eff6ff",
-            "Monitorar":              "#f8fafc",
-        }
-        for _f_d in _fotos_d:
-            _sev_f   = _f_d.get('severidade','Normal')
-            _cor_sev = _SEV_COR.get(_sev_f, "#16A34A")
-            _bg_card = _prazo_bg.get(_f_d.get('prazo_correcao','Monitorar'), "#f8fafc")
-            _mats_f  = _f_d.get('materiais') or []
-            _mat_str = ", ".join(m.get('descricao','') for m in _mats_f if m.get('descricao','').strip()) or "—"
+        st.markdown("---")
+        tec = st.text_input("👷 TÉCNICO EM CAMPO:", value=st.session_state.get("_tecnico_global", ""), placeholder="Seu nome", key="_tec_sidebar_rel")
+        if tec.strip(): st.session_state["_tecnico_global"] = tec.strip()
+        st.markdown("---")
+        menu = st.radio("NAVEGAÇÃO:", ["📝 NOVO RELATÓRIO", "🔍 PESQUISAR E EXPORTAR", "📊 DASHBOARD", "🗺️ ROTEIRIZAÇÃO TÁTICA", "📺 PAINEL SLA"], label_visibility="collapsed")
 
-            _col_img_d, _col_info_d = st.columns([1, 2])
-            _b64_d = _obter_b64_de_foto(_f_d)
-            if _b64_d:
-                _col_img_d.markdown(
-                    f'<img src="data:image/jpeg;base64,{_b64_d}" '
-                    f'style="width:100%;border-radius:10px;border:4px solid {_cor_sev};'
-                    f'box-shadow:0 4px 20px rgba(0,0,0,.18);" />',
-                    unsafe_allow_html=True
-                )
+    if menu == "📝 NOVO RELATÓRIO": tela_novo()
+    elif menu == "🔍 PESQUISAR E EXPORTAR": tela_pesquisa()
+    elif menu == "📊 DASHBOARD": tela_dashboard()
+    elif menu == "🗺️ ROTEIRIZAÇÃO TÁTICA": tela_roteirizacao()
+    elif menu == "📺 PAINEL SLA": tela_painel_sla()
 
-            with _col_info_d:
-                st.markdown(f"""
-                <div style="background:{_bg_card};border-left:8px solid {_cor_sev};
-                    border-radius:10px;padding:clamp(16px,2vw,28px);height:100%;">
-                  <div style="font-size:clamp(18px,3vw,30px);font-weight:800;color:#1e293b;margin-bottom:10px;">
-                    {sanitizar(_f_d.get('titulo','Evidência'))}
-                  </div>
-                  <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
-                    <span style="background:{_cor_sev};color:#fff;padding:4px 14px;
-                        border-radius:20px;font-size:clamp(12px,1.5vw,16px);font-weight:700;">
-                      {sanitizar(_sev_f)}
-                    </span>
-                    <span style="background:{_cor_d};color:#fff;padding:4px 14px;
-                        border-radius:20px;font-size:clamp(12px,1.5vw,16px);font-weight:700;">
-                      {_m_d['icone']} {sanitizar(_f_d.get('prazo_correcao','Monitorar'))}
-                    </span>
-                  </div>
-                  <div style="font-size:clamp(14px,2vw,20px);color:#334155;line-height:1.6;margin-bottom:14px;">
-                    {sanitizar(_f_d.get('comentarios',''))}
-                  </div>
-                  <div style="font-size:clamp(12px,1.5vw,16px);color:#DA291C;font-weight:600;">
-                    🔧 Material: {sanitizar(_mat_str)}
-                  </div>
-                </div>""", unsafe_allow_html=True)
 
-            st.markdown("<hr style='margin:20px 0;border-color:#e2e8f0;'>", unsafe_allow_html=True)
-
-    # Auto-refresh a cada 30s
-    st.markdown("""
-    <script>setTimeout(()=>location.reload(), 30000);</script>
-    """, unsafe_allow_html=True)
-    st.stop()
-
-# ── Roteamento normal ──────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("""
-    <div style="text-align:center;padding:20px 0 10px 0;">
-      <div style="font-size:42px;">⚡</div>
-      <div style="font-size:27px;font-weight:900;letter-spacing:1.5px;color:#fff;">GIRCP</div>
-      <div style="font-size:15px;opacity:0.65;color:#fff;margin-top:2px;">SISTEMA CORPORATIVO</div>
-    </div>""", unsafe_allow_html=True)
-    st.markdown("---")
-    tec = st.text_input("👷 TÉCNICO EM CAMPO:", value=st.session_state.get("_tecnico_global", ""), placeholder="Seu nome", key="_tec_sidebar_rel")
-    if tec.strip(): st.session_state["_tecnico_global"] = tec.strip()
-    st.markdown("---")
-    menu = st.radio("NAVEGAÇÃO:", ["📝 NOVO RELATÓRIO", "🔍 PESQUISAR E EXPORTAR", "📊 DASHBOARD", "🗺️ ROTEIRIZAÇÃO TÁTICA", "📺 PAINEL SLA"], label_visibility="collapsed")
-
-if menu == "📝 NOVO RELATÓRIO": tela_novo()
-elif menu == "🔍 PESQUISAR E EXPORTAR": tela_pesquisa()
-elif menu == "📊 DASHBOARD": tela_dashboard()
-elif menu == "🗺️ ROTEIRIZAÇÃO TÁTICA": tela_roteirizacao()
-elif menu == "📺 PAINEL SLA": tela_painel_sla()
+if __name__ == "__main__":
+    main()
