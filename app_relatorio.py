@@ -1,6 +1,6 @@
 """
 GIRCP — Gerador Inteligente de Relatórios e Controle Fotográfico
-| v3.8.1 (Fixes de Robustez, Concorrência, Testabilidade)
+| v3.9.1 (Refatoração Segura, KPIs com Rótulos Fiéis e Hardening de Login)
 """
 
 import streamlit as st
@@ -74,6 +74,28 @@ def scan_malware_async(file_path: str):
                 pass
     threading.Thread(target=_scan, daemon=True).start()
 
+def _detalhe_falha_login(usuario):
+    return f"Tentativa inválida (usuário: {str(usuario or 'senha geral')[:60]})"
+
+def _falhas_recentes(usuario, minutos=5):
+    """Falhas de login do mesmo usuário nos últimos minutos, contadas na auditoria (sobrevive a recarregar a página)."""
+    try:
+        with sqlite3.connect(DB_NAME) as conn:
+            return conn.execute(
+                "SELECT COUNT(*) FROM audit_log WHERE acao = 'login_falha' AND detalhe = ? "
+                "AND criado_em >= datetime('now', 'localtime', ?)",
+                (_detalhe_falha_login(usuario), f"-{int(minutos)} minutes")).fetchone()[0]
+    except sqlite3.Error:
+        return 0
+
+def _auditar_login(acao, detalhe):
+    """Auditoria de login que nunca derruba o acesso (o banco pode não existir ainda no primeiro login)."""
+    try:
+        init_db()
+        registrar_auditoria(acao, detalhe=detalhe)
+    except Exception:
+        pass
+
 def check_password():
     if "tentativas" not in st.session_state:
         st.session_state["tentativas"] = 0
@@ -89,6 +111,10 @@ def check_password():
 
     def password_entered():
         usuario = st.session_state.get("usuario_input", "").strip().lower()
+        if _falhas_recentes(usuario) >= 5:
+            st.session_state["bloqueado_ate"] = datetime.now() + timedelta(minutes=5)
+            st.session_state["password_correct"] = False
+            return
         cfg = {}
         try:
             if usuario:
@@ -110,13 +136,14 @@ def check_password():
                 st.session_state["_usuario_perfil"] = cfg.get("perfil", "tecnico")
                 if cfg.get("nome"):
                     st.session_state["_tecnico_global"] = cfg["nome"]
-            registrar_auditoria("login_sucesso", detalhe=f"Autenticação válida (usuário: {usuario or 'senha geral'})")
+            _auditar_login("login_sucesso", f"Autenticação válida (usuário: {usuario or 'senha geral'})")
         else:
             st.session_state["password_correct"] = False
             st.session_state["tentativas"] += 1
+            _auditar_login("login_falha", _detalhe_falha_login(usuario))
             if st.session_state["tentativas"] >= 5:
                 st.session_state["bloqueado_ate"] = datetime.now() + timedelta(minutes=5)
-                registrar_auditoria("bloqueio_bruteforce", detalhe="Múltiplas falhas de login")
+                _auditar_login("bloqueio_bruteforce", "Múltiplas falhas de login")
 
     if st.session_state.get("password_correct", False):
         return True
@@ -210,6 +237,42 @@ def registrar_auditoria(acao: str, id_relatorio: int = None, detalhe: str = ""):
 
 def sanitizar(texto: str) -> str:
     return html_mod.escape(str(texto or '').strip())
+
+def _padrao(chave, fallback=""):
+    """Valor padrão do cadastro vindo de st.secrets['padroes'] (evita dados pessoais fixos no código)."""
+    try:
+        return str(st.secrets["padroes"].get(chave, fallback))
+    except Exception:
+        return fallback
+
+def _carregar_lista_json(valor):
+    """Lê uma lista JSON do banco sem derrubar a tela: ausente, inválido ou de outro tipo vira []."""
+    if valor is None:
+        return []
+    if isinstance(valor, (list, tuple)):
+        return list(valor)
+    try:
+        dados = json.loads(valor or "[]")
+    except (ValueError, TypeError):
+        return []
+    return dados if isinstance(dados, list) else []
+
+def _num(valor, padrao=0.0):
+    try:
+        return float(valor)
+    except (ValueError, TypeError):
+        return padrao
+
+def _custo_item(m):
+    """Custo de uma linha de material (quantidade x custo unitário). Texto ou nulo viram o padrão."""
+    m = m or {}
+    return _num(m.get('quantidade', 1), 1.0) * _num(m.get('custo_unit', 0.0))
+
+def _sev_da_foto(f):
+    return normalizar_sev(f.get('severidade', 'Normal'))
+
+def _tem_critico(fotos):
+    return any(_sev_da_foto(f) == 'Critico' for f in fotos)
 
 def verificar_integridade_codigo():
     """
@@ -415,11 +478,11 @@ def gerar_pdf(dados: dict, fotos: list, extras: list = None) -> tuple[bytes, str
     sig_img = f'<img class="assinatura-img" src="data:image/png;base64,{b64_sig}"/>' if b64_sig else '<div style="height:40px;"></div>'
     logo_img = f'<img class="logo-img" src="data:image/png;base64,{b64_logo}"/>' if b64_logo else ""
 
-    n_criticos = sum(1 for f in fotos if normalizar_sev(f.get('severidade','')) == 'Critico')
+    n_criticos = sum(1 for f in fotos if _sev_da_foto(f) == 'Critico')
     n_obs      = sum(1 for f in fotos if normalizar_sev(f.get('severidade','')) == 'Observacao')
     n_normal   = len(fotos) - n_criticos - n_obs
     all_mats   = [m for f in fotos for m in (f.get('materiais') or []) if m.get('descricao','').strip()]
-    total_custo = sum(m.get('quantidade',0)*m.get('custo_unit',0) for m in all_mats)
+    total_custo = sum(_custo_item(m) for m in all_mats)
 
     resumo_html = f"""
     <div class="section-header">2 &nbsp; RESUMO EXECUTIVO</div>
@@ -461,13 +524,13 @@ def gerar_pdf(dados: dict, fotos: list, extras: list = None) -> tuple[bytes, str
         
         mat_html_bloco = ''
         if mats_list and any(m.get('descricao','').strip() for m in mats_list):
-            subtotal_ev = sum(m.get('quantidade',0)*m.get('custo_unit',0) for m in mats_list)
+            subtotal_ev = sum(_custo_item(m) for m in mats_list)
             rows_mat = "".join(
                 "<tr><td style='padding:3px 8px;border:1px solid #e2e8f0;'>" + sanitizar(m.get('descricao','')) + "</td>"
                 "<td style='padding:3px 8px;border:1px solid #e2e8f0;text-align:center;'>" + sanitizar(m.get('unidade','un')) + "</td>"
                 "<td style='padding:3px 8px;border:1px solid #e2e8f0;text-align:center;'>" + str(int(m.get('quantidade',1))) + "</td>"
                 "<td style='padding:3px 8px;border:1px solid #e2e8f0;text-align:right;'>R$ " + f"{m.get('custo_unit',0):.2f}" + "</td>"
-                "<td style='padding:3px 8px;border:1px solid #e2e8f0;text-align:right;font-weight:bold;'>R$ " + f"{m.get('quantidade',0)*m.get('custo_unit',0):.2f}" + "</td></tr>"
+                "<td style='padding:3px 8px;border:1px solid #e2e8f0;text-align:right;font-weight:bold;'>R$ " + f"{_custo_item(m):.2f}" + "</td></tr>"
                 for m in mats_list if m.get('descricao','').strip()
             )
             subtotal_html = (
@@ -807,7 +870,7 @@ def _widget_materiais(session_key: str, mats_default: list | None = None) -> lis
     if st.button("＋ Adicionar material", key=f"{session_key}_add"):
         mats.append(dict(_MAT_VAZIO)); st.rerun()
 
-    subtotal = sum(m.get("quantidade", 0) * m.get("custo_unit", 0) for m in mats)
+    subtotal = sum(_custo_item(m) for m in mats)
     if subtotal > 0:
         st.markdown(
             f"<div style='text-align:right;font-size:12px;color:{COR_AZUL};'>"
@@ -837,16 +900,16 @@ def tela_novo():
     c1, c2, c3 = st.columns(3)
     with c1:
         titulo  = st.text_input(LBL_TITULO, value="AFAZ - \"sera preenchido posteriormente\"", key="novo_titulo")
-        contato = st.text_input("CONTATO / TÉCNICO", value="Claudevani Pereira", key="novo_contato")
+        contato = st.text_input("CONTATO / TÉCNICO", value=_padrao("contato"), key="novo_contato")
     with c2:
         empresa  = st.text_input("EMPRESA", value="GIRCP", key="novo_empresa")
-        telefone = st.text_input("TELEFONE", value="11947414606", key="novo_telefone")
+        telefone = st.text_input("TELEFONE", value=_padrao("telefone"), key="novo_telefone")
     with c3:
-        email   = st.text_input("E-MAIL", value="clauevani.pereira@engemon.com.br", key="novo_email")
+        email   = st.text_input("E-MAIL", value=_padrao("email"), key="novo_email")
         site_id = st.text_input("IDENTIFICAÇÃO DO SITE", value=site_selecionado)
 
-    tecnico  = st.text_input("TÉCNICO EM CAMPO", value="Claudevani", key="novo_tecnico")
-    art_rrt = st.text_input("ART / RRT Nº", value="CRT - 247.652.xxx.xx", key="novo_art_rrt")
+    tecnico  = st.text_input("TÉCNICO EM CAMPO", value=_padrao("tecnico", _padrao("contato")), key="novo_tecnico")
+    art_rrt = st.text_input("ART / RRT Nº", value=_padrao("art_rrt"), key="novo_art_rrt")
     endereco = st.text_input("ENDEREÇO FÍSICO", value=endereco_autofill)
 
     c_lat_novo, c_lon_novo = st.columns(2)
@@ -903,7 +966,7 @@ def tela_novo():
 
             raw_comp = comprimir_para_pdf(raw)
             foto_id  = hashlib.sha256(raw).hexdigest()[:16]
-            safe_key = f"ev_{idx}_{hashlib.md5(filename.encode()).hexdigest()[:8]}"
+            safe_key = f"ev_{idx}_{hashlib.sha256(filename.encode()).hexdigest()[:8]}"
             
             caminho_foto = _caminho_seguro(f"ev_{foto_id}.jpg")
             with open(caminho_foto, "wb") as f_out: f_out.write(raw_comp)
@@ -1046,7 +1109,7 @@ def _executar_acao_inline(lid, fid, acao, prefixo, db_field):
     with sqlite3.connect(DB_NAME) as conn:
         row = conn.execute(_QUERIES_CAMPO[db_field]["select"], (lid,)).fetchone()
         if not row or not row[0]: return
-        fotos = json.loads(row[0])
+        fotos = _carregar_lista_json(row[0])
         for i in range(len(fotos)):
             cfid = fotos[i].get("foto_id", fotos[i].get("base64", "")[:16])
             t_val = st.session_state.get(f"{prefixo}t_{lid}_{cfid}")
@@ -1066,7 +1129,7 @@ def _executar_acao_inline(lid, fid, acao, prefixo, db_field):
                 caminho_del = fotos[k].get("caminho")
                 if caminho_del and os.path.exists(caminho_del):
                     try: os.remove(caminho_del)
-                    except: pass
+                    except OSError: pass
                 fotos.pop(k)
             conn.execute(_QUERIES_CAMPO[db_field]["update"], (json.dumps(fotos), lid))
             conn.commit()
@@ -1255,10 +1318,10 @@ def _render_relatorio_expander(row):
         st.rerun()
 
     if st.session_state[exp_key]:
-        fotos_db = json.loads(row['fotos_json'] if row['fotos_json'] else "[]")
+        fotos_db = _carregar_lista_json(row['fotos_json'])
         
         ext_str = row['extras_json'] if 'extras_json' in row.keys() and row['extras_json'] else "[]"
-        extras_db = json.loads(ext_str)
+        extras_db = _carregar_lista_json(ext_str)
         
         with st.container(border=True):
             state = _render_dados_cadastrais_form(row, lid, fotos_db, extras_db)
@@ -1274,7 +1337,8 @@ def tela_pesquisa():
     with sqlite3.connect(DB_NAME) as conn:
         conn.row_factory = sqlite3.Row
         if termo.strip():
-            rows = conn.execute("SELECT * FROM relatorios WHERE site_id LIKE ? OR titulo LIKE ? ORDER BY id DESC LIMIT ?", (f'%{termo}%', f'%{termo}%', limite)).fetchall()
+            _t_like = termo.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            rows = conn.execute("SELECT * FROM relatorios WHERE site_id LIKE ? ESCAPE '\\' OR titulo LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT ?", (f'%{_t_like}%', f'%{_t_like}%', limite)).fetchall()
         else:
             rows = conn.execute("SELECT * FROM relatorios ORDER BY id DESC LIMIT ?", (limite,)).fetchall()
 
@@ -1286,8 +1350,8 @@ def tela_pesquisa():
     ta, tb, tc = st.columns(3)
     # Métricas pré-computadas com int() para garantir que apenas números entram no HTML
     _n_resultados = int(len(rows))
-    _n_evidencias = int(sum(len(json.loads(r['fotos_json'] if r['fotos_json'] else '[]')) for r in rows))
-    _n_anexos     = int(sum(len(json.loads(r['extras_json'] if 'extras_json' in r.keys() and r['extras_json'] else '[]')) for r in rows))
+    _n_evidencias = int(sum(len(_carregar_lista_json(r['fotos_json'])) for r in rows))
+    _n_anexos     = int(sum(len(_carregar_lista_json(r['extras_json'] if 'extras_json' in r.keys() else None)) for r in rows))
     with ta: st.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{_n_resultados}</div><div class="eng-metric-label">RESULTADOS</div></div>', unsafe_allow_html=True)
     with tb: st.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{_n_evidencias}</div><div class="eng-metric-label">EVIDÊNCIAS</div></div>', unsafe_allow_html=True)
     with tc: st.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{_n_anexos}</div><div class="eng-metric-label">ANEXOS</div></div>', unsafe_allow_html=True)
@@ -1340,13 +1404,9 @@ def _montar_evidencias(df):
             for m in (f.get("materiais") or []):
                 if not str(m.get("descricao", "")).strip():
                     continue
-                try:
-                    q = float(m.get("quantidade", 1))
-                    cu = float(m.get("custo_unit", 0.0))
-                except (ValueError, TypeError):
-                    q, cu = 1.0, 0.0
+                cu = _num(m.get("custo_unit", 0.0))
                 n_mat += 1
-                custo += q * cu
+                custo += _custo_item(m)
                 if cu == 0:
                     sem_custo += 1
             linhas.append({
@@ -1479,50 +1539,7 @@ def _render_estatisticas(df_f):
         tab["%"] = (tab["Ocorrências"] / tab["Base"].where(tab["Base"] > 0) * 100).fillna(0).round(1)
         st.dataframe(tab, use_container_width=True, hide_index=True)
 
-def tela_dashboard():
-    banner("DASHBOARD")
-    with sqlite3.connect(DB_NAME) as conn:
-        df = pd.read_sql_query("SELECT * FROM relatorios ORDER BY id DESC", conn)
-
-    if df.empty:
-        st.info("NENHUM RELATÓRIO CADASTRADO AINDA.")
-        return
-
-    df['tecnico'] = df['tecnico'].fillna(df['contato'])
-    df['tecnico'] = df['tecnico'].apply(_normalizar_tecnico)
-    df['qtd_fotos'] = df['fotos_json'].apply(lambda x: len(json.loads(x or "[]")))
-    df['qtd_extras'] = df.get('extras_json', pd.Series(['[]']*len(df))).apply(lambda x: len(json.loads(x or "[]")))
-    df['total_imagens'] = df['qtd_fotos'] + df['qtd_extras']
-    
-    try:
-        df['data_formatada'] = pd.to_datetime(df['data_hora'].str.extract(r'(\d{2}/\d{2}/\d{4})')[0], format='%d/%m/%Y', errors='coerce')
-    except:
-        df['data_formatada'] = pd.NaT
-
-    st.markdown("### 🎛️ Filtros Analíticos")
-    ocultar_teste = st.checkbox('Ocultar registros de teste (técnico com "TESTE" no nome)', value=True, key="dash_ocultar_teste")
-    if ocultar_teste:
-        _eh_teste = df['tecnico'].str.contains('teste', case=False, na=False)
-        if _eh_teste.any():
-            st.caption(f"🧪 {int(_eh_teste.sum())} registro(s) de teste ocultado(s).")
-        df = df[~_eh_teste]
-        if df.empty:
-            st.info("Todos os registros são de teste. Desmarque a opção acima para vê-los.")
-            return
-    c_tec, c_site = st.columns(2)
-    with c_tec:
-        lista_tecnicos = df['tecnico'].dropna().unique().tolist()
-        tec_sel = st.multiselect("Filtrar por Técnico:", lista_tecnicos, default=lista_tecnicos)
-    with c_site:
-        lista_sites = df['site_id'].dropna().unique().tolist()
-        site_sel = st.multiselect("Filtrar por Site:", lista_sites, default=lista_sites)
-    
-    df_filtrado = df[(df['tecnico'].isin(tec_sel)) & (df['site_id'].isin(site_sel))]
-
-    if df_filtrado.empty:
-        st.warning("Nenhum dado corresponde aos filtros selecionados.")
-        return
-
+def _dash_resumo(df_filtrado):
     secao("📊", "RESUMO GERAL")
     m1, m2, m3, m4 = st.columns(4)
     m1.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{len(df_filtrado)}</div><div class="eng-metric-label">RELATÓRIOS</div></div>', unsafe_allow_html=True)
@@ -1537,8 +1554,8 @@ def tela_dashboard():
     with st.expander("📋 Ver todos os laudos — selecionar para destacar", expanded=False):
         rows_resumo = ""
         for _, r_res in df_filtrado.iterrows():
-            fotos_res  = json.loads(r_res['fotos_json'] or '[]')
-            n_crit_res = sum(1 for f in fotos_res if normalizar_sev(f.get('severidade','Normal')) == 'Critico')
+            fotos_res  = _carregar_lista_json(r_res['fotos_json'])
+            n_crit_res = sum(1 for f in fotos_res if _sev_da_foto(f) == 'Critico')
             prazo_res  = min((f.get('prazo_correcao','Monitorar') for f in fotos_res), key=lambda p_: _ORDEM_PRAZO.get(p_, 99), default='Monitorar')
             m_res      = _SLA_META.get(prazo_res, _SLA_META["Monitorar"])
             cor_crit   = "#DA291C" if n_crit_res > 0 else "#16A34A"
@@ -1608,7 +1625,7 @@ def tela_dashboard():
         severidades = {"Critico": 0, "Observacao": 0, "Normal": 0}
         
         for _, r in df_filtrado.iterrows():
-            for foto in json.loads(r['fotos_json'] or "[]"):
+            for foto in _carregar_lista_json(r['fotos_json']):
                 sev = foto.get('severidade', 'Normal')
                 sev_norm = normalizar_sev(sev)
                 severidades[sev_norm] = severidades.get(sev_norm, 0) + 1
@@ -1623,13 +1640,16 @@ def tela_dashboard():
             st.info("Sem dados de severidade para exibir.")
 
     st.markdown("---")
+
+
+def _dash_sla(df_filtrado):
     secao("⏱️", "PAINEL SLA — CONTROLE DE PRAZOS DE CORREÇÃO")
 
-    _prazos_ord = ["Imediato (0–24h)", "Urgente (até 7 dias)", "Planejado (até 30 dias)", "Monitorar"]
+    _prazos_ord = list(_PRAZOS_ORD)
     sla_contagem = {p: 0 for p in _prazos_ord}
     sla_itens    = []
     for _, r_sla in df_filtrado.iterrows():
-        for f_sla in json.loads(r_sla['fotos_json'] or '[]'):
+        for f_sla in _carregar_lista_json(r_sla['fotos_json']):
             prazo_sla = f_sla.get('prazo_correcao', 'Monitorar')
             sla_contagem[prazo_sla] = sla_contagem.get(prazo_sla, 0) + 1
             sla_itens.append({
@@ -1713,17 +1733,19 @@ def tela_dashboard():
         )
 
     st.markdown("---")
+
+
+def _dash_mapa(df_filtrado):
     secao("🌍", "MAPA TÁTICO DE VISTORIAS (GEOLOCALIZAÇÃO)")
     col_st1, col_st2 = st.columns([2, 1])
     with col_st1:
-        status_opcoes = ["Todos", "✅ Concluída", "⚙️ Em Andamento", "🕐 Pendente"]
+        status_opcoes = ["Todos", "✅ Com evidências", "📷 Sem evidências"]
         status_filtro = st.radio("Exibir visitas:", status_opcoes, horizontal=True, key="mapa_status_filtro")
     with col_st2:
         st.markdown(
             f"""<div style='background:#fff;border:1px solid {COR_BORDA};border-radius:8px;padding:10px 14px;font-size:11px;line-height:1.8;'>
-            <span style='color:#16A34A;font-size:15px;'>●</span> <b>Concluída</b> — relatório com fotos<br>
-            <span style='color:#D97706;font-size:15px;'>●</span> <b>Em Andamento</b> — sem fotos ainda<br>
-            <span style='color:#64748B;font-size:15px;'>●</span> <b>Pendente</b> — sem visita registrada<br>
+            <span style='color:#16A34A;font-size:15px;'>●</span> <b>Com evidências</b> — relatório com fotos<br>
+            <span style='color:#D97706;font-size:15px;'>●</span> <b>Sem evidências</b> — laudo sem fotos<br>
             <span style='color:#DA291C;font-size:15px;'>◆</span> <b>Anomalia crítica</b> detectada
             </div>""",
             unsafe_allow_html=True
@@ -1741,18 +1763,15 @@ def tela_dashboard():
         tem_critico_lista   = []
 
         for _, row_m in df_mapa.iterrows():
-            fotos_row = json.loads(row_m['fotos_json'] or '[]')
-            tem_critico = any(
-                normalizar_sev(f.get('severidade', 'Normal')) == 'Critico'
-                for f in fotos_row
-            )
+            fotos_row = _carregar_lista_json(row_m['fotos_json'])
+            tem_critico = _tem_critico(fotos_row)
             tem_critico_lista.append(tem_critico)
 
             if len(fotos_row) > 0:
-                status = "Concluída"
+                status = "Com evidências"
                 cor    = [218, 41, 28, 220] if tem_critico else [22, 163, 74, 220]
             else:
-                status = "Em Andamento"
+                status = "Sem evidências"
                 cor    = [217, 119, 6, 220]
 
             status_lista.append(status)
@@ -1761,26 +1780,24 @@ def tela_dashboard():
         df_mapa['status_visita'] = status_lista
         df_mapa['color_rgb']     = cores_mapa_filtrado
         df_mapa['tem_critico']   = tem_critico_lista
-        df_mapa['icone_status']  = df_mapa['status_visita'].map({"Concluída": "✅", "Em Andamento": "⚙️", "Pendente": "🕐"})
+        df_mapa['icone_status']  = df_mapa['status_visita'].map({"Com evidências": "✅", "Sem evidências": "📷"})
         df_mapa['alerta_critico'] = df_mapa['tem_critico'].apply(lambda x: "⚠️ ANOMALIA CRÍTICA" if x else "")
 
-        if status_filtro == "✅ Concluída": df_mapa = df_mapa[df_mapa['status_visita'] == "Concluída"]
-        elif status_filtro == "⚙️ Em Andamento": df_mapa = df_mapa[df_mapa['status_visita'] == "Em Andamento"]
-        elif status_filtro == "🕐 Pendente": df_mapa = df_mapa[df_mapa['status_visita'] == "Pendente"]
+        if status_filtro == "✅ Com evidências": df_mapa = df_mapa[df_mapa['status_visita'] == "Com evidências"]
+        elif status_filtro == "📷 Sem evidências": df_mapa = df_mapa[df_mapa['status_visita'] == "Sem evidências"]
 
         total_df = df_filtrado.copy()
-        total_df['fotos_row'] = total_df['fotos_json'].apply(lambda x: json.loads(x or '[]'))
+        total_df['fotos_row'] = total_df['fotos_json'].apply(lambda x: _carregar_lista_json(x))
         n_concluidas   = total_df['fotos_row'].apply(lambda f: len(f) > 0).sum()
         n_andamento    = total_df['fotos_row'].apply(lambda f: len(f) == 0).sum()
 
         mc1, mc2, mc3 = st.columns(3)
-        mc1.markdown(f'<div class="eng-metric"><div class="eng-metric-val" style="color:#16A34A;">{n_concluidas}</div><div class="eng-metric-label">CONCLUÍDAS</div></div>', unsafe_allow_html=True)
-        mc2.markdown(f'<div class="eng-metric"><div class="eng-metric-val" style="color:#D97706;">{n_andamento}</div><div class="eng-metric-label">EM ANDAMENTO</div></div>', unsafe_allow_html=True)
+        mc1.markdown(f'<div class="eng-metric"><div class="eng-metric-val" style="color:#16A34A;">{n_concluidas}</div><div class="eng-metric-label">COM EVIDÊNCIAS</div></div>', unsafe_allow_html=True)
+        mc2.markdown(f'<div class="eng-metric"><div class="eng-metric-val" style="color:#D97706;">{n_andamento}</div><div class="eng-metric-label">SEM EVIDÊNCIAS</div></div>', unsafe_allow_html=True)
         n_anomalia_critica = int(df_filtrado["fotos_json"].apply(
-            lambda x: any(normalizar_sev(f.get("severidade", "Normal")) == "Critico"
-                          for f in json.loads(x or "[]"))
+            lambda x: _tem_critico(_carregar_lista_json(x))
         ).sum())
-        mc3.markdown(f'<div class="eng-metric"><div class="eng-metric-val" style="color:#DA291C;">{n_anomalia_critica}</div><div class="eng-metric-label">C/ ANOMALIA CRÍTICA</div></div>', unsafe_allow_html=True)
+        mc3.markdown(f'<div class="eng-metric"><div class="eng-metric-val" style="color:#DA291C;">{n_anomalia_critica}</div><div class="eng-metric-label">LAUDOS C/ ANOMALIA CRÍTICA</div></div>', unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
 
@@ -1802,6 +1819,9 @@ def tela_dashboard():
         st.info("💡 O banco de dados atual não possui as colunas de Latitude/Longitude preenchidas.")
 
     st.markdown("---")
+
+
+def _dash_tendencia(df_filtrado):
     secao("📅", "TENDÊNCIA TEMPORAL DE VISTORIAS")
     df_tempo = df_filtrado.dropna(subset=['data_formatada']).groupby('data_formatada').size().reset_index(name='Laudos')
     if not df_tempo.empty:
@@ -1813,10 +1833,13 @@ def tela_dashboard():
         st.info("Dados de data insuficientes para gerar a linha do tempo.")
 
     st.markdown("---")
+
+
+def _dash_orcamento(df_filtrado):
     secao("💰", "PAINEL DE ORÇAMENTO — MATERIAIS NECESSÁRIOS")
     itens_orc = []
     for _, row_orc in df_filtrado.iterrows():
-        fotos_orc = json.loads(row_orc['fotos_json'] or '[]')
+        fotos_orc = _carregar_lista_json(row_orc['fotos_json'])
         for foto_orc in fotos_orc:
             mats_orc = foto_orc.get('materiais') or []
             if not mats_orc and foto_orc.get('material_necessario','').strip():
@@ -1832,7 +1855,7 @@ def tela_dashboard():
                         'Unidade':   m.get('unidade','un'),
                         'Qtd':       float(m.get('quantidade',1)),
                         'Unit_R$':   float(m.get('custo_unit',0.0)),
-                        'Total_R$':  float(m.get('quantidade',1)) * float(m.get('custo_unit',0.0)),
+                        'Total_R$':  _custo_item(m),
                     })
 
     if not itens_orc:
@@ -1846,7 +1869,7 @@ def tela_dashboard():
 
         oc1, oc2, oc3, oc4 = st.columns(4)
         oc1.markdown(f'<div class="eng-metric"><div class="eng-metric-val" style="color:{COR_AZUL};">R$ {total_geral:,.2f}</div><div class="eng-metric-label">TOTAL ESTIMADO</div></div>', unsafe_allow_html=True)
-        oc2.markdown(f'<div class="eng-metric"><div class="eng-metric-val" style="color:#DA291C;">{n_criticos}</div><div class="eng-metric-label">ITENS CRÍTICOS</div></div>', unsafe_allow_html=True)
+        oc2.markdown(f'<div class="eng-metric"><div class="eng-metric-val" style="color:#DA291C;">{n_criticos}</div><div class="eng-metric-label">MATERIAIS EM ITENS CRÍTICOS</div></div>', unsafe_allow_html=True)
         oc3.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{n_materiais}</div><div class="eng-metric-label">MATERIAIS DISTINTOS</div></div>', unsafe_allow_html=True)
         oc4.markdown(f'<div class="eng-metric"><div class="eng-metric-val" style="color:#D97706;">{total_semcusto}</div><div class="eng-metric-label">SEM CUSTO INFORMADO</div></div>', unsafe_allow_html=True)
 
@@ -1914,6 +1937,9 @@ def tela_dashboard():
         )
 
     st.markdown("---")
+
+
+def _dash_auditoria():
     secao("🛡️", "LOG DE AUDITORIA (LGPD)")
     with st.expander("Visualizar Registros de Sistema"):
         try:
@@ -1923,8 +1949,60 @@ def tela_dashboard():
                     st.dataframe(df_audit, use_container_width=True, hide_index=True)
                 else:
                     st.info("Nenhum registro de auditoria encontrado.")
-        except:
+        except Exception:
             st.info("Log de auditoria em inicialização.")
+
+
+def tela_dashboard():
+    banner("DASHBOARD")
+    with sqlite3.connect(DB_NAME) as conn:
+        df = pd.read_sql_query("SELECT * FROM relatorios ORDER BY id DESC", conn)
+
+    if df.empty:
+        st.info("NENHUM RELATÓRIO CADASTRADO AINDA.")
+        return
+
+    df['tecnico'] = df['tecnico'].fillna(df['contato'])
+    df['tecnico'] = df['tecnico'].apply(_normalizar_tecnico)
+    df['qtd_fotos'] = df['fotos_json'].apply(lambda x: len(_carregar_lista_json(x)))
+    df['qtd_extras'] = df.get('extras_json', pd.Series(['[]']*len(df))).apply(lambda x: len(_carregar_lista_json(x)))
+    df['total_imagens'] = df['qtd_fotos'] + df['qtd_extras']
+    
+    try:
+        df['data_formatada'] = pd.to_datetime(df['data_hora'].str.extract(r'(\d{2}/\d{2}/\d{4})')[0], format='%d/%m/%Y', errors='coerce')
+    except Exception:
+        df['data_formatada'] = pd.NaT
+
+    st.markdown("### 🎛️ Filtros Analíticos")
+    ocultar_teste = st.checkbox('Ocultar registros de teste (técnico com "TESTE" no nome)', value=True, key="dash_ocultar_teste")
+    if ocultar_teste:
+        _eh_teste = df['tecnico'].str.contains('teste', case=False, na=False)
+        if _eh_teste.any():
+            st.caption(f"🧪 {int(_eh_teste.sum())} registro(s) de teste ocultado(s).")
+        df = df[~_eh_teste]
+        if df.empty:
+            st.info("Todos os registros são de teste. Desmarque a opção acima para vê-los.")
+            return
+    c_tec, c_site = st.columns(2)
+    with c_tec:
+        lista_tecnicos = df['tecnico'].dropna().unique().tolist()
+        tec_sel = st.multiselect("Filtrar por Técnico:", lista_tecnicos, default=lista_tecnicos)
+    with c_site:
+        lista_sites = df['site_id'].dropna().unique().tolist()
+        site_sel = st.multiselect("Filtrar por Site:", lista_sites, default=lista_sites)
+    
+    df_filtrado = df[(df['tecnico'].isin(tec_sel)) & (df['site_id'].isin(site_sel))]
+
+    if df_filtrado.empty:
+        st.warning("Nenhum dado corresponde aos filtros selecionados.")
+        return
+
+    _dash_resumo(df_filtrado)
+    _dash_sla(df_filtrado)
+    _dash_mapa(df_filtrado)
+    _dash_tendencia(df_filtrado)
+    _dash_orcamento(df_filtrado)
+    _dash_auditoria()
 
 # ══════════════════════════════════════════════════════════════════════════
 # MÓDULO: ROTEIRIZAÇÃO TÁTICA (VRP E FIELD SERVICE)
@@ -1951,8 +2029,19 @@ def resolver_tsp_local(ponto_partida, lista_sites):
         
     return rota
 
+_GEO_CACHE = {}
+_GEO_ULTIMA = [0.0]
+
 def geocodificar_endereco(endereco):
     """Converte endereço em (lat, lon) via Nominatim/OpenStreetMap (somente Brasil). Retorna None se falhar."""
+    import time
+    chave = " ".join(str(endereco).lower().split())
+    if chave in _GEO_CACHE:
+        return _GEO_CACHE[chave]
+    espera = 1.1 - (time.time() - _GEO_ULTIMA[0])
+    if espera > 0:
+        time.sleep(espera)
+    _GEO_ULTIMA[0] = time.time()
     try:
         r = requests.get(
             "https://nominatim.openstreetmap.org/search",
@@ -1963,7 +2052,10 @@ def geocodificar_endereco(endereco):
         r.raise_for_status()
         dados = r.json()
         if isinstance(dados, list) and dados:
-            return float(dados[0]["lat"]), float(dados[0]["lon"])
+            if len(_GEO_CACHE) >= 200:
+                _GEO_CACHE.clear()
+            _GEO_CACHE[chave] = (float(dados[0]["lat"]), float(dados[0]["lon"]))
+            return _GEO_CACHE[chave]
     except Exception:
         pass
     return None
@@ -2055,11 +2147,13 @@ def tela_roteirizacao():
                 
                 duracao_total_seg = (distancia_total_km / 40.0) * 3600
             
+            _met_km = "VIA ORS" if geojson_rota else "LINHA RETA"
+            _met_tempo = "ORS" if geojson_rota else "EST. 40 KM/H"
             secao("KPI", "MÉTRICAS DA OPERAÇÃO DE CAMPO")
             m1, m2, m3, m4 = st.columns(4)
             m1.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{len(sites_alvo)}</div><div class="eng-metric-label">SITES ATENDIDOS</div></div>', unsafe_allow_html=True)
-            m2.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{distancia_total_km:.1f} km</div><div class="eng-metric-label">QUILOMETRAGEM ESTIMADA</div></div>', unsafe_allow_html=True)
-            m3.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{formatar_tempo(duracao_total_seg)}</div><div class="eng-metric-label">WINDSHIELD TIME (DIREÇÃO)</div></div>', unsafe_allow_html=True)
+            m2.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{distancia_total_km:.1f} km</div><div class="eng-metric-label">QUILOMETRAGEM ({_met_km})</div></div>', unsafe_allow_html=True)
+            m3.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{formatar_tempo(duracao_total_seg)}</div><div class="eng-metric-label">TEMPO DE DIREÇÃO ({_met_tempo})</div></div>', unsafe_allow_html=True)
             
             densidade = len(sites_alvo) / distancia_total_km if distancia_total_km > 0 else 0
             m4.markdown(f'<div class="eng-metric"><div class="eng-metric-val">{densidade:.2f}</div><div class="eng-metric-label">DENSIDADE (Sites/Km)</div></div>', unsafe_allow_html=True)
@@ -2111,7 +2205,7 @@ def tela_roteirizacao():
             for p_ev in rota_salva[1:]:
                 sid_ev = p_ev['id']
                 row_ev = conn_ev.execute("SELECT fotos_json FROM relatorios WHERE TRIM(UPPER(site_id)) = TRIM(UPPER(?)) ORDER BY id DESC LIMIT 1", (sid_ev,)).fetchone()
-                fotos_ev = json.loads(row_ev[0]) if row_ev and row_ev[0] else []
+                fotos_ev = _carregar_lista_json(row_ev[0] if row_ev else None)
                 evidencias_por_site[sid_ev] = fotos_ev
 
         total_criticos_ui = sum(1 for evs in evidencias_por_site.values() for ev in evs if ev.get('severidade', '') in ('Critico', 'Crítico'))
@@ -2263,7 +2357,7 @@ def tela_painel_sla():
     .painel-header{border-radius:14px;box-shadow:0 4px 14px rgba(0,32,96,.25)}
     </style>""", unsafe_allow_html=True)
 
-    _prazos_ord = ["Imediato (0–24h)", "Urgente (até 7 dias)", "Planejado (até 30 dias)", "Monitorar"]
+    _prazos_ord = list(_PRAZOS_ORD)
 
     with st.expander("⚙️ Opções", expanded=False):
         o1, o2, o3 = st.columns([1.4, 1.6, 1])
@@ -2284,7 +2378,7 @@ def tela_painel_sla():
             n_teste += 1
             continue
         try:
-            fotos_r = json.loads(r_row['fotos_json'] or '[]')
+            fotos_r = _carregar_lista_json(r_row['fotos_json'])
         except (ValueError, TypeError):
             fotos_r = []
         for f_item in fotos_r:
@@ -2633,7 +2727,7 @@ def main() -> None:
         _fotos_d = []
         if _rows_d:
             _row_dict = dict(zip(_cols_d, _rows_d))
-            _fotos_d  = json.loads(_row_dict.get('fotos_json') or '[]')
+            _fotos_d  = _carregar_lista_json(_row_dict.get('fotos_json'))
             if _prazo_d:
                 _fotos_d = [f for f in _fotos_d if f.get('prazo_correcao','Monitorar') == _prazo_d]
             if _ev_d:

@@ -1,0 +1,518 @@
+{
+ "dashboard": {
+  "excecoes": [],
+  "erros": [],
+  "markdown": [
+   "<style> [data-testid=\"stAppViewContainer\"] { background: #F8FAFC; } [data-testid=\"stSidebar\"] { background: #002060 !important; } [data-testid=\"stSidebar\"] * { color: #fff !important; } .eng-banner { background: linear-gradient(135deg, #002060 0%, #003087 100%); color: #fff; padding: 20px 28px; border-radius: 10px; margin-bottom: 24px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 4px 16px rgba(0,32,96,0.18); } .eng-banner-title { font-size: 22px; font-weight: 900; letter-spacing: 1.2px; text-transform: uppercase; } .eng-banner-badge { background: #DA291C; color: #fff; padding: 5px 14px; border-radius: 20px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; } .eng-section { background: #002060; color: #fff; padding: 10px 18px; border-radius: 6px; margin: 24px 0 14px 0; font-weight: 700; font-size: 13px; text-transform: uppercase; border-left: 5px solid #DA291C; } .eng-metric { background: #fff; border: 1.5px solid #CBD5E1; border-radius: 8px; padding: 14px 10px; text-align: center; } .eng-metric-val { font-size: 26px; font-weight: 900; color: #002060; line-height: 1.1; } .eng-metric-label { font-size: 10px; color: #64748B; text-transform: uppercase; margin-top: 4px; letter-spacing: 0.5px; } .sla-box { border-radius: 8px; padding: 10px 14px; margin-top: 4px; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; } .sla-imediato { background: #fff1f0; border: 2px solid #DA291C; color: #7f1d1d; animation: sla-pulse 1.4s infinite; } .sla-urgente { background: #fff7ed; border: 2px solid #ea580c; color: #7c2d12; } .sla-planejado{ background: #eff6ff; border: 2px solid #2563eb; color: #1e3a8a; } .sla-monitorar{ background: #f8fafc; border: 2px solid #CBD5E1; color: #64748B; } @keyframes sla-pulse { 0%,100%{opacity:1} 50%{opacity:.55} } .sla-kpi { border-radius: 10px; padding: 16px 12px; text-align: center; border: 2px solid transparent; } .sla-kpi-imediato { background:#fff1f0; border-color:#DA291C; } .sla-kpi-urgente { background:#fff7ed; border-color:#ea580c; } .sla-kpi-planejado{ background:#eff6ff; border-color:#2563eb; } .sla-kpi-monitorar{ background:#f8fafc; border-color:#CBD5E1; } .sla-kpi-val { font-size: 28px; font-weight: 900; line-height: 1.1; } .sla-kpi-lbl { font-size: 10px; text-transform: uppercase; margin-top: 4px; letter-spacing: .5px; } </style>",
+   "<div class=\"eng-banner\"> <div> <div class=\"eng-banner-title\">⚡ GIRCP</div> <div style=\"font-size: 12px; opacity: 0.75; margin-top: 2px;\">GERADOR INTELIGENTE DE RELATÓRIOS E CONTROLE FOTOGRÁFICO &mdash; DASHBOARD</div> </div> <div class=\"eng-banner-badge\">SISTEMA CORPORATIVO</div> </div>",
+   "### 🎛️ Filtros Analíticos",
+   "<div class=\"eng-section\">📊 &nbsp; RESUMO GERAL</div>",
+   "<div class=\"eng-metric\"><div class=\"eng-metric-val\">5</div><div class=\"eng-metric-label\">RELATÓRIOS</div></div>",
+   "<div class=\"eng-metric\"><div class=\"eng-metric-val\">5</div><div class=\"eng-metric-label\">SITES ÚNICOS</div></div>",
+   "<div class=\"eng-metric\"><div class=\"eng-metric-val\">6</div><div class=\"eng-metric-label\">EVIDÊNCIAS</div></div>",
+   "<div class=\"eng-metric\"><div class=\"eng-metric-val\">1</div><div class=\"eng-metric-label\">ANEXOS</div></div>",
+   "<div class=\"eng-section\">📐 &nbsp; ESTATÍSTICAS GERAIS</div>",
+   "<div class=\"eng-metric\"><div class=\"eng-metric-val\" style=\"color:#DA291C;\">16.7%</div><div class=\"eng-metric-label\">TAXA DE CRITICIDADE</div></div>",
+   "<div class=\"eng-metric\"><div class=\"eng-metric-val\">1.2</div><div class=\"eng-metric-label\">MÉDIA EVID. / LAUDO</div></div>",
+   "<div class=\"eng-metric\"><div class=\"eng-metric-val\" style=\"color:#ea580c;\">3</div><div class=\"eng-metric-label\">SLA IMEDIATO + URGENTE</div></div>",
+   "<div class=\"eng-metric\"><div class=\"eng-metric-val\" style=\"color:#002060;\">R$ 1,670.00</div><div class=\"eng-metric-label\">CUSTO ESTIMADO</div></div>",
+   "<div class=\"eng-metric\"><div class=\"eng-metric-val\" style=\"color:#D97706;\">1</div><div class=\"eng-metric-label\">LAUDOS SEM EVIDÊNCIA</div></div>",
+   "<br>",
+   "<div class=\"eng-metric\"><div class=\"eng-metric-val\">3</div><div class=\"eng-metric-label\">SITES COM \"ANTES\"</div></div>",
+   "<div class=\"eng-metric\"><div class=\"eng-metric-val\">1</div><div class=\"eng-metric-label\">SITES COM \"DEPOIS\"</div></div>",
+   "<div class=\"eng-metric\"><div class=\"eng-metric-val\" style=\"color:#D97706;\">2</div><div class=\"eng-metric-label\">\"ANTES\" SEM \"DEPOIS\"</div></div>",
+   "<br>",
+   "<div style='overflow-x:auto;border-radius:8px;border:1px solid #e2e8f0;'><table style='width:100%;border-collapse:collapse;font-size:12px;'><thead><tr style='background:#002060;color:#fff;'><th style='padding:8px 10px;text-align:left;'>Site</th><th style='padding:8px 10px;text-align:left;'>Técnico</th><th style='padding:8px 10px;text-align:left;'>Data</th><th style='padding:8px 10px;text-align:center;'>Evidências</th><th style='padding:8px 10px;text-align:center;'>Críticos</th><th style='padding:8px 10px;text-align:left;'>SLA</th><th style='padding:8px 10px;text-align:left;'>Ação</th></tr></thead><tbody><tr><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-weight:700;'>SMXXX</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'>Fulano</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;color:#64748B;'>data invalida</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:center;'>1</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:center;font-weight:700;color:#16A34A;'>0</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;color:#64748B;font-weight:600;'>⚪ Outro</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'><a href=\"/?destaque=SMXXX&prazo=Outro\" target=\"_blank\" style=\"display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#002060;color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none;cursor:pointer;\" title=\"Destacar em nova tela\">🖥️ Destacar</a></td></tr><tr><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-weight:700;'>SMPB09</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'>Tecnico A</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;color:#64748B;'><DATAHORA></td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:center;'>0</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:center;font-weight:700;color:#16A34A;'>0</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;color:#64748B;font-weight:600;'>⚪ Monitorar</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'><a href=\"/?destaque=SMPB09&prazo=Monitorar\" target=\"_blank\" style=\"display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#002060;color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none;cursor:pointer;\" title=\"Destacar em nova tela\">🖥️ Destacar</a></td></tr><tr><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-weight:700;'>SMIPI28</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'>João da Silva</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;color:#64748B;'><DATAHORA></td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:center;'>1</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:center;font-weight:700;color:#16A34A;'>0</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;color:#ea580c;font-weight:600;'>🟠 Urgente (até 7 dias)</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'><a href=\"/?destaque=SMIPI28&prazo=Urgente+%28at%C3%A9+7+dias%29\" target=\"_blank\" style=\"display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#002060;color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none;cursor:pointer;\" title=\"Destacar em nova tela\">🖥️ Destacar</a></td></tr><tr><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-weight:700;'>SMMAU12</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'>Tecnico A Sobrenome</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;color:#64748B;'><DATAHORA></td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:center;'>3</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:center;font-weight:700;color:#DA291C;'>1</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;color:#DA291C;font-weight:600;'>🔴 Imediato (0–24h)</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'><a href=\"/?destaque=SMMAU12&prazo=Imediato+%280%E2%80%9324h%29\" target=\"_blank\" style=\"display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#002060;color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none;cursor:pointer;\" title=\"Destacar em nova tela\">🖥️ Destacar</a></td></tr><tr><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-weight:700;'>SMGRSA7</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'>Tecnico A</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;color:#64748B;'><DATAHORA></td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:center;'>1</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:center;font-weight:700;color:#16A34A;'>0</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;color:#2563eb;font-weight:600;'>🔵 Planejado (até 30 dias)</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'><a href=\"/?destaque=SMGRSA7&prazo=Planejado+%28at%C3%A9+30+dias%29\" target=\"_blank\" style=\"display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#002060;color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none;cursor:pointer;\" title=\"Destacar em nova tela\">🖥️ Destacar</a></td></tr></tbody></table></div>",
+   "---",
+   "<div class=\"eng-section\">📈 &nbsp; PRODUTIVIDADE (TOP SITES)</div>",
+   "<div style='overflow-x:auto;border-radius:8px;border:1px solid #e2e8f0;margin-top:8px;'><table style='width:100%;border-collapse:collapse;font-size:12px;'><thead><tr style='background:#002060;color:#fff;'><th style='padding:7px 10px;text-align:left;'>Site</th><th style='padding:7px 10px;text-align:center;'>Evidências</th><th style='padding:7px 10px;text-align:left;'>Ação</th></tr></thead><tbody><tr><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-weight:600;'>SMMAU12</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:center;'>4</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'><a href=\"/?destaque=SMMAU12\" target=\"_blank\" style=\"display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#002060;color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none;cursor:pointer;\" title=\"Destacar em nova tela\">🖥️ Destacar</a></td></tr><tr><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-weight:600;'>SMGRSA7</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:center;'>1</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'><a href=\"/?destaque=SMGRSA7\" target=\"_blank\" style=\"display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#002060;color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none;cursor:pointer;\" title=\"Destacar em nova tela\">🖥️ Destacar</a></td></tr><tr><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-weight:600;'>SMIPI28</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:center;'>1</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'><a href=\"/?destaque=SMIPI28\" target=\"_blank\" style=\"display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#002060;color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none;cursor:pointer;\" title=\"Destacar em nova tela\">🖥️ Destacar</a></td></tr><tr><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-weight:600;'>SMXXX</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:center;'>1</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'><a href=\"/?destaque=SMXXX\" target=\"_blank\" style=\"display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#002060;color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none;cursor:pointer;\" title=\"Destacar em nova tela\">🖥️ Destacar</a></td></tr><tr><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-weight:600;'>SMPB09</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:center;'>0</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'><a href=\"/?destaque=SMPB09\" target=\"_blank\" style=\"display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#002060;color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none;cursor:pointer;\" title=\"Destacar em nova tela\">🖥️ Destacar</a></td></tr></tbody></table></div>",
+   "<div class=\"eng-section\">🚨 &nbsp; DISTRIBUIÇÃO DE SEVERIDADE</div>",
+   "---",
+   "<div class=\"eng-section\">⏱️ &nbsp; PAINEL SLA — CONTROLE DE PRAZOS DE CORREÇÃO</div>",
+   "<div class=\"sla-kpi sla-kpi-imediato\"><div class=\"sla-kpi-val\" style=\"color:#DA291C;\">🔴 1</div><div class=\"sla-kpi-lbl\" style=\"color:#DA291C;\">Imediato (0–24h)</div></div>",
+   "<div class=\"sla-kpi sla-kpi-urgente\"><div class=\"sla-kpi-val\" style=\"color:#ea580c;\">🟠 2</div><div class=\"sla-kpi-lbl\" style=\"color:#ea580c;\">Urgente (até 7 dias)</div></div>",
+   "<div class=\"sla-kpi sla-kpi-planejado\"><div class=\"sla-kpi-val\" style=\"color:#2563eb;\">🔵 1</div><div class=\"sla-kpi-lbl\" style=\"color:#2563eb;\">Planejado (até 30 dias)</div></div>",
+   "<div class=\"sla-kpi sla-kpi-monitorar\"><div class=\"sla-kpi-val\" style=\"color:#64748B;\">⚪ 1</div><div class=\"sla-kpi-lbl\" style=\"color:#64748B;\">Monitorar</div></div>",
+   "<div class=\"sla-box sla-imediato\" style=\"margin-top:12px;\">⚠️ ATENÇÃO: 1 evidência(s) com SLA IMEDIATO (0–24h) requerem ação urgente!</div>",
+   "<br>",
+   "<div style='overflow-x:auto;border-radius:8px;border:1px solid #e2e8f0;'><table style='width:100%;border-collapse:collapse;font-size:13px;'><thead><tr style='background:#002060;color:#fff;'><th style='padding:8px 10px;text-align:left;'>Site</th><th style='padding:8px 10px;text-align:left;'>Evidência</th><th style='padding:8px 10px;text-align:left;'>Técnico</th><th style='padding:8px 10px;text-align:left;'>Data</th><th style='padding:8px 10px;text-align:left;'>Severidade</th><th style='padding:8px 10px;text-align:left;'>SLA / Prazo</th><th style='padding:8px 10px;text-align:left;'>Ação</th></tr></thead><tbody><tr style='background:#fff;'><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;font-weight:600;'>SMXXX</td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;'>Prazo estranho</td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;'>Fulano</td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;color:#64748B;'>data invalida</td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;'>Normal</td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;font-weight:700;color:#64748B;'>⚪ Outro</td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;'><a href=\"/?destaque=SMXXX&prazo=Outro&ev=Prazo+estranho\" target=\"_blank\" style=\"display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#002060;color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none;cursor:pointer;\" title=\"Destacar em nova tela\">🖥️ Destacar</a></td></tr><tr style='background:#fff7ed;'><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;font-weight:600;'>SMIPI28</td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;'>Cabo exposto</td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;'>João da Silva</td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;color:#64748B;'><DATAHORA></td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;'>Observação</td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;font-weight:700;color:#ea580c;'>🟠 Urgente (até 7 dias)</td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;'><a href=\"/?destaque=SMIPI28&prazo=Urgente+%28at%C3%A9+7+dias%29&ev=Cabo+exposto\" target=\"_blank\" style=\"display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#002060;color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none;cursor:pointer;\" title=\"Destacar em nova tela\">🖥️ Destacar</a></td></tr><tr style='background:#f8fafc;'><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;font-weight:600;'>SMMAU12</td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;'>VISOR</td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;'>Tecnico A Sobrenome</td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;color:#64748B;'><DATAHORA></td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;'>Normal</td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;font-weight:700;color:#64748B;'>⚪ Monitorar</td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;'><a href=\"/?destaque=SMMAU12&prazo=Monitorar&ev=VISOR\" target=\"_blank\" style=\"display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#002060;color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none;cursor:pointer;\" title=\"Destacar em nova tela\">🖥️ Destacar</a></td></tr><tr style='background:#fff1f0;'><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;font-weight:600;'>SMMAU12</td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;'>POSTE</td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;'>Tecnico A Sobrenome</td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;color:#64748B;'><DATAHORA></td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;'>Crítico</td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;font-weight:700;color:#DA291C;'>🔴 Imediato (0–24h)</td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;'><a href=\"/?destaque=SMMAU12&prazo=Imediato+%280%E2%80%9324h%29&ev=POSTE\" target=\"_blank\" style=\"display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#002060;color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none;cursor:pointer;\" title=\"Destacar em nova tela\">🖥️ Destacar</a></td></tr><tr style='background:#fff7ed;'><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;font-weight:600;'>SMMAU12</td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;'>QM</td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;'>Tecnico A Sobrenome</td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;color:#64748B;'><DATAHORA></td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;'>Observação</td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;font-weight:700;color:#ea580c;'>🟠 Urgente (até 7 dias)</td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;'><a href=\"/?destaque=SMMAU12&prazo=Urgente+%28at%C3%A9+7+dias%29&ev=QM\" target=\"_blank\" style=\"display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#002060;color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none;cursor:pointer;\" title=\"Destacar em nova tela\">🖥️ Destacar</a></td></tr><tr style='background:#eff6ff;'><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;font-weight:600;'>SMGRSA7</td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;'>Evidência 1</td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;'>Tecnico A</td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;color:#64748B;'><DATAHORA></td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;'>Normal</td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;font-weight:700;color:#2563eb;'>🔵 Planejado (até 30 dias)</td><td style='padding:7px 10px;border-bottom:1px solid #e2e8f0;'><a href=\"/?destaque=SMGRSA7&prazo=Planejado+%28at%C3%A9+30+dias%29&ev=Evid%C3%AAncia+1\" target=\"_blank\" style=\"display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#002060;color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none;cursor:pointer;\" title=\"Destacar em nova tela\">🖥️ Destacar</a></td></tr></tbody></table></div>",
+   "---",
+   "<div class=\"eng-section\">🌍 &nbsp; MAPA TÁTICO DE VISTORIAS (GEOLOCALIZAÇÃO)</div>",
+   "<div style='background:#fff;border:1px solid #CBD5E1;border-radius:8px;padding:10px 14px;font-size:11px;line-height:1.8;'> <span style='color:#16A34A;font-size:15px;'>●</span> <b>Com evidências</b> — relatório com fotos<br> <span style='color:#D97706;font-size:15px;'>●</span> <b>Sem evidências</b> — laudo sem fotos<br> <span style='color:#DA291C;font-size:15px;'>◆</span> <b>Anomalia crítica</b> detectada </div>",
+   "<div class=\"eng-metric\"><div class=\"eng-metric-val\" style=\"color:#16A34A;\">4</div><div class=\"eng-metric-label\">COM EVIDÊNCIAS</div></div>",
+   "<div class=\"eng-metric\"><div class=\"eng-metric-val\" style=\"color:#D97706;\">1</div><div class=\"eng-metric-label\">SEM EVIDÊNCIAS</div></div>",
+   "<div class=\"eng-metric\"><div class=\"eng-metric-val\" style=\"color:#DA291C;\">1</div><div class=\"eng-metric-label\">LAUDOS C/ ANOMALIA CRÍTICA</div></div>",
+   "<br>",
+   "---",
+   "<div class=\"eng-section\">📅 &nbsp; TENDÊNCIA TEMPORAL DE VISTORIAS</div>",
+   "---",
+   "<div class=\"eng-section\">💰 &nbsp; PAINEL DE ORÇAMENTO — MATERIAIS NECESSÁRIOS</div>",
+   "<div class=\"eng-metric\"><div class=\"eng-metric-val\" style=\"color:#002060;\">R$ 1,670.00</div><div class=\"eng-metric-label\">TOTAL ESTIMADO</div></div>",
+   "<div class=\"eng-metric\"><div class=\"eng-metric-val\" style=\"color:#DA291C;\">1</div><div class=\"eng-metric-label\">MATERIAIS EM ITENS CRÍTICOS</div></div>",
+   "<div class=\"eng-metric\"><div class=\"eng-metric-val\">4</div><div class=\"eng-metric-label\">MATERIAIS DISTINTOS</div></div>",
+   "<div class=\"eng-metric\"><div class=\"eng-metric-val\" style=\"color:#D97706;\">1</div><div class=\"eng-metric-label\">SEM CUSTO INFORMADO</div></div>",
+   "<br>",
+   "<div style='overflow-x:auto;border-radius:8px;border:1px solid #e2e8f0;'><table style='width:100%;border-collapse:collapse;font-size:12px;'><thead><tr style='background:#002060;color:#fff;'><th style='padding:8px 10px;text-align:left;'>Site</th><th style='padding:8px 10px;text-align:left;'>Evidência</th><th style='padding:8px 10px;text-align:left;'>Severidade</th><th style='padding:8px 10px;text-align:left;'>SLA</th><th style='padding:8px 10px;text-align:left;'>Material</th><th style='padding:8px 10px;text-align:center;'>Un.</th><th style='padding:8px 10px;text-align:center;'>Qtd.</th><th style='padding:8px 10px;text-align:right;'>Unit. R$</th><th style='padding:8px 10px;text-align:right;'>Total R$</th><th style='padding:8px 10px;text-align:left;'>Ação</th></tr></thead><tbody><tr><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-weight:600;'>SMMAU12</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'>POSTE</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-weight:600;color:#DA291C;'>Crítico</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;color:#DA291C;font-weight:600;'>🔴 Imediato (0–24h)</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'>poste</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:center;'>un</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:center;'>1</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:right;'>R$ 1,500.00</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:700;'>R$ 1,500.00</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'><a href=\"/?destaque=SMMAU12&prazo=Imediato+%280%E2%80%9324h%29&ev=POSTE\" target=\"_blank\" style=\"display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#002060;color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none;cursor:pointer;\" title=\"Destacar em nova tela\">🖥️ Destacar</a></td></tr><tr><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-weight:600;'>SMMAU12</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'>QM</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-weight:600;color:#D97706;'>Observação</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;color:#ea580c;font-weight:600;'>🟠 Urgente (até 7 dias)</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'>disjuntor</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:center;'>un</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:center;'>3</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:right;'>R$ 40.00</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:700;'>R$ 120.00</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'><a href=\"/?destaque=SMMAU12&prazo=Urgente+%28at%C3%A9+7+dias%29&ev=QM\" target=\"_blank\" style=\"display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#002060;color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none;cursor:pointer;\" title=\"Destacar em nova tela\">🖥️ Destacar</a></td></tr><tr><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-weight:600;'>SMGRSA7</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'>Evidência 1</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-weight:600;color:#16A34A;'>Normal</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;color:#2563eb;font-weight:600;'>🔵 Planejado (até 30 dias)</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'>cabo</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:center;'>un</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:center;'>10</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:right;'>R$ 5.00</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:700;'>R$ 50.00</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'><a href=\"/?destaque=SMGRSA7&prazo=Planejado+%28at%C3%A9+30+dias%29&ev=Evid%C3%AAncia+1\" target=\"_blank\" style=\"display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#002060;color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none;cursor:pointer;\" title=\"Destacar em nova tela\">🖥️ Destacar</a></td></tr><tr><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-weight:600;'>SMGRSA7</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'>Evidência 1</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-weight:600;color:#16A34A;'>Normal</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;color:#2563eb;font-weight:600;'>🔵 Planejado (até 30 dias)</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'>borne</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:center;'>un</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:center;'>2</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:right;'>R$ 0.00</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:700;'>R$ 0.00</td><td style='padding:6px 10px;border-bottom:1px solid #e2e8f0;'><a href=\"/?destaque=SMGRSA7&prazo=Planejado+%28at%C3%A9+30+dias%29&ev=Evid%C3%AAncia+1\" target=\"_blank\" style=\"display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#002060;color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none;cursor:pointer;\" title=\"Destacar em nova tela\">🖥️ Destacar</a></td></tr></tbody></table></div>",
+   "---",
+   "<div class=\"eng-section\">🛡️ &nbsp; LOG DE AUDITORIA (LGPD)</div>",
+   "<div style=\"text-align:center;padding:20px 0 10px 0;\"> <div style=\"font-size:42px;\">⚡</div> <div style=\"font-size:27px;font-weight:900;letter-spacing:1.5px;color:#fff;\">GIRCP</div> <div style=\"font-size:15px;opacity:0.65;color:#fff;margin-top:2px;\">SISTEMA CORPORATIVO</div> </div>",
+   "---",
+   "---"
+  ],
+  "caption": [
+   "🧪 1 registro(s) de teste ocultado(s).",
+   "Top 15 sites por nº de evidências críticas, depois SLA imediato.",
+   "Indicador aproximado de correções sem comprovação fotográfica: o app ainda não registra o fechamento de cada pendência.",
+   "Sites: SMGRSA7, SMIPI28",
+   "⚠️ 1 item(ns) sem custo unitário informado — total estimado pode estar incompleto."
+  ],
+  "info": [
+   "Nenhum registro de auditoria encontrado."
+  ],
+  "dataframes": [
+   [
+    {
+     "Técnico": "Tecnico A",
+     "Laudos": 2,
+     "Evidências": 1,
+     "Críticas": 0,
+     "Custo est. (R$)": 50.0,
+     "% Críticas": 0.0,
+     "Média evid./laudo": 0.5
+    },
+    {
+     "Técnico": "Fulano",
+     "Laudos": 1,
+     "Evidências": 1,
+     "Críticas": 0,
+     "Custo est. (R$)": 0.0,
+     "% Críticas": 0.0,
+     "Média evid./laudo": 1.0
+    },
+    {
+     "Técnico": "João da Silva",
+     "Laudos": 1,
+     "Evidências": 1,
+     "Críticas": 0,
+     "Custo est. (R$)": 0.0,
+     "% Críticas": 0.0,
+     "Média evid./laudo": 1.0
+    },
+    {
+     "Técnico": "Tecnico A Sobrenome",
+     "Laudos": 1,
+     "Evidências": 3,
+     "Críticas": 1,
+     "Custo est. (R$)": 1620.0,
+     "% Críticas": 33.3,
+     "Média evid./laudo": 3.0
+    }
+   ],
+   [
+    {
+     "Site": "SMMAU12",
+     "Laudos": 1,
+     "Evidências": 3,
+     "Críticas": 1,
+     "Observações": 1,
+     "SLA imediato": 1,
+     "Custo est. (R$)": 1620.0
+    },
+    {
+     "Site": "SMXXX",
+     "Laudos": 1,
+     "Evidências": 1,
+     "Críticas": 0,
+     "Observações": 0,
+     "SLA imediato": 0,
+     "Custo est. (R$)": 0.0
+    },
+    {
+     "Site": "SMIPI28",
+     "Laudos": 1,
+     "Evidências": 1,
+     "Críticas": 0,
+     "Observações": 1,
+     "SLA imediato": 0,
+     "Custo est. (R$)": 0.0
+    },
+    {
+     "Site": "SMGRSA7",
+     "Laudos": 1,
+     "Evidências": 1,
+     "Críticas": 0,
+     "Observações": 0,
+     "SLA imediato": 0,
+     "Custo est. (R$)": 50.0
+    },
+    {
+     "Site": "SMPB09",
+     "Laudos": 1,
+     "Evidências": 0,
+     "Críticas": 0,
+     "Observações": 0,
+     "SLA imediato": 0,
+     "Custo est. (R$)": 0.0
+    }
+   ],
+   [
+    {
+     "Categoria": "Antes",
+     "Evidências": 3
+    },
+    {
+     "Categoria": "Geral",
+     "Evidências": 2
+    },
+    {
+     "Categoria": "Depois",
+     "Evidências": 1
+    }
+   ],
+   [
+    {
+     "Status": "Não informado",
+     "Laudos": 2,
+     "%": 40.0
+    },
+    {
+     "Status": "❌ Reprovado",
+     "Laudos": 1,
+     "%": 20.0
+    },
+    {
+     "Status": "⚠️ Aprovado com Ressalvas",
+     "Laudos": 1,
+     "%": 20.0
+    },
+    {
+     "Status": "✅ Aprovado",
+     "Laudos": 1,
+     "%": 20.0
+    }
+   ],
+   [
+    {
+     "Indicador": "Laudos sem coordenadas GPS",
+     "Ocorrências": 2,
+     "Base": 5,
+     "%": 40.0
+    },
+    {
+     "Indicador": "Laudos sem evidências",
+     "Ocorrências": 1,
+     "Base": 5,
+     "%": 20.0
+    },
+    {
+     "Indicador": "Laudos com data não reconhecida",
+     "Ocorrências": 1,
+     "Base": 5,
+     "%": 20.0
+    },
+    {
+     "Indicador": "Evidências críticas sem material informado",
+     "Ocorrências": 0,
+     "Base": 1,
+     "%": 0.0
+    },
+    {
+     "Indicador": "Materiais sem custo unitário",
+     "Ocorrências": 1,
+     "Base": 4,
+     "%": 25.0
+    }
+   ]
+  ],
+  "metricas": [],
+  "botoes": [],
+  "checkbox": [
+   [
+    "Ocultar registros de teste (técnico com \"TESTE\" no nome)",
+    true
+   ]
+  ],
+  "radio": [
+   [
+    "Exibir visitas:",
+    "Todos"
+   ],
+   [
+    "NAVEGAÇÃO:",
+    "📊 DASHBOARD"
+   ]
+  ],
+  "multiselect": [
+   [
+    "Filtrar por Técnico:",
+    [
+     "Fulano",
+     "Tecnico A",
+     "João da Silva",
+     "Tecnico A Sobrenome"
+    ]
+   ],
+   [
+    "Filtrar por Site:",
+    [
+     "SMXXX",
+     "SMPB09",
+     "SMIPI28",
+     "SMMAU12",
+     "SMGRSA7"
+    ]
+   ]
+  ],
+  "expanders": [
+   "📋 Ver todos os laudos — selecionar para destacar",
+   "Visualizar Registros de Sistema"
+  ],
+  "abas": [
+   "👷 Por técnico",
+   "📍 Por site (risco)",
+   "🖼️ Antes / Depois",
+   "📋 Status dos laudos",
+   "🧹 Qualidade dos dados"
+  ],
+  "graficos": 5
+ },
+ "sla": {
+  "excecoes": [],
+  "erros": [],
+  "markdown": [
+   "<style> [data-testid=\"stAppViewContainer\"] { background: #F8FAFC; } [data-testid=\"stSidebar\"] { background: #002060 !important; } [data-testid=\"stSidebar\"] * { color: #fff !important; } .eng-banner { background: linear-gradient(135deg, #002060 0%, #003087 100%); color: #fff; padding: 20px 28px; border-radius: 10px; margin-bottom: 24px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 4px 16px rgba(0,32,96,0.18); } .eng-banner-title { font-size: 22px; font-weight: 900; letter-spacing: 1.2px; text-transform: uppercase; } .eng-banner-badge { background: #DA291C; color: #fff; padding: 5px 14px; border-radius: 20px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; } .eng-section { background: #002060; color: #fff; padding: 10px 18px; border-radius: 6px; margin: 24px 0 14px 0; font-weight: 700; font-size: 13px; text-transform: uppercase; border-left: 5px solid #DA291C; } .eng-metric { background: #fff; border: 1.5px solid #CBD5E1; border-radius: 8px; padding: 14px 10px; text-align: center; } .eng-metric-val { font-size: 26px; font-weight: 900; color: #002060; line-height: 1.1; } .eng-metric-label { font-size: 10px; color: #64748B; text-transform: uppercase; margin-top: 4px; letter-spacing: 0.5px; } .sla-box { border-radius: 8px; padding: 10px 14px; margin-top: 4px; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; } .sla-imediato { background: #fff1f0; border: 2px solid #DA291C; color: #7f1d1d; animation: sla-pulse 1.4s infinite; } .sla-urgente { background: #fff7ed; border: 2px solid #ea580c; color: #7c2d12; } .sla-planejado{ background: #eff6ff; border: 2px solid #2563eb; color: #1e3a8a; } .sla-monitorar{ background: #f8fafc; border: 2px solid #CBD5E1; color: #64748B; } @keyframes sla-pulse { 0%,100%{opacity:1} 50%{opacity:.55} } .sla-kpi { border-radius: 10px; padding: 16px 12px; text-align: center; border: 2px solid transparent; } .sla-kpi-imediato { background:#fff1f0; border-color:#DA291C; } .sla-kpi-urgente { background:#fff7ed; border-color:#ea580c; } .sla-kpi-planejado{ background:#eff6ff; border-color:#2563eb; } .sla-kpi-monitorar{ background:#f8fafc; border-color:#CBD5E1; } .sla-kpi-val { font-size: 28px; font-weight: 900; line-height: 1.1; } .sla-kpi-lbl { font-size: 10px; text-transform: uppercase; margin-top: 4px; letter-spacing: .5px; } </style>",
+   "<style> [data-testid=\"stSidebar\"] { display: none !important; } [data-testid=\"stHeader\"] { display: none !important; } .block-container { padding: 1rem 1rem 2rem !important; max-width: 100% !important; } .sla-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; } .sla-card { border-radius: 12px; padding: 16px; border-left: 6px solid; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.07); display: flex; flex-direction: column; gap: 6px; } .sla-card-imediato { border-color: #DA291C; background: #fff5f5; } .sla-card-urgente { border-color: #ea580c; background: #fff8f3; } .sla-card-planejado { border-color: #2563eb; background: #f0f6ff; } .sla-card-monitorar { border-color: #94a3b8; background: #f8fafc; } .sla-card-site { font-size: 11px; font-weight: 700; text-transform: uppercase; color: #64748B; } .sla-card-titulo { font-size: 15px; font-weight: 700; color: #1e293b; line-height: 1.3; } .sla-card-desc { font-size: 12px; color: #475569; } .sla-card-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; flex-wrap: wrap; gap: 4px; } .sla-pill { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; } .pill-imediato { background:#fecaca; color:#7f1d1d; } .pill-urgente { background:#fed7aa; color:#7c2d12; } .pill-planejado { background:#bfdbfe; color:#1e3a8a; } .pill-monitorar { background:#e2e8f0; color:#475569; } .pill-critico { background:#fecaca; color:#7f1d1d; } .pill-observacao{ background:#fde68a; color:#78350f; } .pill-normal { background:#bbf7d0; color:#14532d; } .painel-header { background:#002060; color:#fff; border-radius:10px; padding:14px 20px; display:flex; justify-content:space-between; align-items:center; margin-bottom:18px; flex-wrap:wrap; gap:8px; } .painel-header h2 { font-size: clamp(15px, 3vw, 22px); font-weight: 800; margin: 0; } .painel-header span { font-size: 12px; opacity: .8; } @media (max-width: 600px) { .sla-card-grid { grid-template-columns: 1fr; } } </style>",
+   "<style> .sla-card-grid{grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:12px} .sla-card{padding:12px 14px;border-radius:14px;gap:4px;transition:transform .15s,box-shadow .15s} .sla-card:hover{transform:translateY(-2px);box-shadow:0 6px 16px rgba(0,0,0,.12)} .sla-card-titulo{font-size:14px} .painel-header{border-radius:14px;box-shadow:0 4px 14px rgba(0,32,96,.25)} </style>",
+   "<div class=\"painel-header\" style=\"background:linear-gradient(90deg,#7f1d1d,#DA291C);\"><h2>⏱️ PAINEL SLA</h2><span>⚠️ 1 IMEDIATO(S) &nbsp;|&nbsp; 6 evidência(s) &nbsp;|&nbsp; 🧪 1 laudo(s) de teste oculto(s) &nbsp;|&nbsp; <DATAHORA></span></div>",
+   "<div class=\"sla-card-grid\"><div class=\"sla-card sla-card-imediato\"><div class=\"sla-card-site\">📍 SMMAU12 · 👷 Tecnico A Sobrenome</div><div class=\"sla-card-titulo\">POSTE</div><div class=\"sla-card-desc\">risco de queda</div><div class=\"sla-card-footer\"><span class=\"sla-pill pill-imediato\">🔴 Imediato (0–24h)</span><span class=\"sla-pill pill-critico\">Crítico</span><span style=\"font-size:11px;color:#94a3b8;\"><DATAHORA></span><a href=\"/?destaque=SMMAU12&prazo=Imediato+%280%E2%80%9324h%29&ev=POSTE\" target=\"_blank\" style=\"display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#002060;color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none;cursor:pointer;\" title=\"Destacar em nova tela\">🖥️ Destacar</a></div></div><div class=\"sla-card sla-card-urgente\"><div class=\"sla-card-site\">📍 SMIPI28 · 👷 João da Silva</div><div class=\"sla-card-titulo\">Cabo exposto</div><div class=\"sla-card-footer\"><span class=\"sla-pill pill-urgente\">🟠 Urgente (até 7 dias)</span><span class=\"sla-pill pill-observacao\">Observação</span><span style=\"font-size:11px;color:#94a3b8;\"><DATAHORA></span><a href=\"/?destaque=SMIPI28&prazo=Urgente+%28at%C3%A9+7+dias%29&ev=Cabo+exposto\" target=\"_blank\" style=\"display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#002060;color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none;cursor:pointer;\" title=\"Destacar em nova tela\">🖥️ Destacar</a></div></div><div class=\"sla-card sla-card-urgente\"><div class=\"sla-card-site\">📍 SMMAU12 · 👷 Tecnico A Sobrenome</div><div class=\"sla-card-titulo\">QM</div><div class=\"sla-card-desc\">sem proteção</div><div class=\"sla-card-footer\"><span class=\"sla-pill pill-urgente\">🟠 Urgente (até 7 dias)</span><span class=\"sla-pill pill-observacao\">Observação</span><span style=\"font-size:11px;color:#94a3b8;\"><DATAHORA></span><a href=\"/?destaque=SMMAU12&prazo=Urgente+%28at%C3%A9+7+dias%29&ev=QM\" target=\"_blank\" style=\"display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#002060;color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none;cursor:pointer;\" title=\"Destacar em nova tela\">🖥️ Destacar</a></div></div><div class=\"sla-card sla-card-planejado\"><div class=\"sla-card-site\">📍 SMGRSA7 · 👷 Tecnico A</div><div class=\"sla-card-titulo\">Evidência 1</div><div class=\"sla-card-footer\"><span class=\"sla-pill pill-planejado\">🔵 Planejado (até 30 dias)</span><span style=\"font-size:11px;color:#94a3b8;\"><DATAHORA></span><a href=\"/?destaque=SMGRSA7&prazo=Planejado+%28at%C3%A9+30+dias%29&ev=Evid%C3%AAncia+1\" target=\"_blank\" style=\"display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:#002060;color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none;cursor:pointer;\" title=\"Destacar em nova tela\">🖥️ Destacar</a></div></div></div>",
+   "<br>",
+   "<a href=\"/\" style=\"display:inline-flex;align-items:center;gap:6px;padding:8px 18px;background:#002060;color:#fff;border-radius:8px;font-size:13px;font-weight:600;text-decoration:none;margin-top:8px;\">← Voltar ao menu principal</a>",
+   "<div style=\"text-align:center;padding:20px 0 10px 0;\"> <div style=\"font-size:42px;\">⚡</div> <div style=\"font-size:27px;font-weight:900;letter-spacing:1.5px;color:#fff;\">GIRCP</div> <div style=\"font-size:15px;opacity:0.65;color:#fff;margin-top:2px;\">SISTEMA CORPORATIVO</div> </div>",
+   "---",
+   "---"
+  ],
+  "caption": [],
+  "info": [],
+  "dataframes": [],
+  "metricas": [],
+  "botoes": [],
+  "checkbox": [
+   [
+    "Ocultar registros de teste",
+    true
+   ],
+   [
+    "🔄 Auto-refresh (30s)",
+    false
+   ]
+  ],
+  "radio": [
+   [
+    "NAVEGAÇÃO:",
+    "📺 PAINEL SLA"
+   ]
+  ],
+  "multiselect": [],
+  "expanders": [
+   "⚙️ Opções"
+  ],
+  "abas": [],
+  "graficos": 0
+ },
+ "pesquisa": {
+  "excecoes": [],
+  "erros": [],
+  "markdown": [
+   "<style> [data-testid=\"stAppViewContainer\"] { background: #F8FAFC; } [data-testid=\"stSidebar\"] { background: #002060 !important; } [data-testid=\"stSidebar\"] * { color: #fff !important; } .eng-banner { background: linear-gradient(135deg, #002060 0%, #003087 100%); color: #fff; padding: 20px 28px; border-radius: 10px; margin-bottom: 24px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 4px 16px rgba(0,32,96,0.18); } .eng-banner-title { font-size: 22px; font-weight: 900; letter-spacing: 1.2px; text-transform: uppercase; } .eng-banner-badge { background: #DA291C; color: #fff; padding: 5px 14px; border-radius: 20px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; } .eng-section { background: #002060; color: #fff; padding: 10px 18px; border-radius: 6px; margin: 24px 0 14px 0; font-weight: 700; font-size: 13px; text-transform: uppercase; border-left: 5px solid #DA291C; } .eng-metric { background: #fff; border: 1.5px solid #CBD5E1; border-radius: 8px; padding: 14px 10px; text-align: center; } .eng-metric-val { font-size: 26px; font-weight: 900; color: #002060; line-height: 1.1; } .eng-metric-label { font-size: 10px; color: #64748B; text-transform: uppercase; margin-top: 4px; letter-spacing: 0.5px; } .sla-box { border-radius: 8px; padding: 10px 14px; margin-top: 4px; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; } .sla-imediato { background: #fff1f0; border: 2px solid #DA291C; color: #7f1d1d; animation: sla-pulse 1.4s infinite; } .sla-urgente { background: #fff7ed; border: 2px solid #ea580c; color: #7c2d12; } .sla-planejado{ background: #eff6ff; border: 2px solid #2563eb; color: #1e3a8a; } .sla-monitorar{ background: #f8fafc; border: 2px solid #CBD5E1; color: #64748B; } @keyframes sla-pulse { 0%,100%{opacity:1} 50%{opacity:.55} } .sla-kpi { border-radius: 10px; padding: 16px 12px; text-align: center; border: 2px solid transparent; } .sla-kpi-imediato { background:#fff1f0; border-color:#DA291C; } .sla-kpi-urgente { background:#fff7ed; border-color:#ea580c; } .sla-kpi-planejado{ background:#eff6ff; border-color:#2563eb; } .sla-kpi-monitorar{ background:#f8fafc; border-color:#CBD5E1; } .sla-kpi-val { font-size: 28px; font-weight: 900; line-height: 1.1; } .sla-kpi-lbl { font-size: 10px; text-transform: uppercase; margin-top: 4px; letter-spacing: .5px; } </style>",
+   "<div class=\"eng-banner\"> <div> <div class=\"eng-banner-title\">⚡ GIRCP</div> <div style=\"font-size: 12px; opacity: 0.75; margin-top: 2px;\">GERADOR INTELIGENTE DE RELATÓRIOS E CONTROLE FOTOGRÁFICO &mdash; PESQUISAR, EDITAR E EXPORTAR</div> </div> <div class=\"eng-banner-badge\">SISTEMA CORPORATIVO</div> </div>",
+   "<div class=\"eng-section\">🔍 &nbsp; BUSCAR RELATÓRIOS</div>",
+   "<br>",
+   "<div class=\"eng-metric\"><div class=\"eng-metric-val\">6</div><div class=\"eng-metric-label\">RESULTADOS</div></div>",
+   "<div class=\"eng-metric\"><div class=\"eng-metric-val\">7</div><div class=\"eng-metric-label\">EVIDÊNCIAS</div></div>",
+   "<div class=\"eng-metric\"><div class=\"eng-metric-val\">1</div><div class=\"eng-metric-label\">ANEXOS</div></div>",
+   "<br>",
+   "<div style=\"text-align:center;padding:20px 0 10px 0;\"> <div style=\"font-size:42px;\">⚡</div> <div style=\"font-size:27px;font-weight:900;letter-spacing:1.5px;color:#fff;\">GIRCP</div> <div style=\"font-size:15px;opacity:0.65;color:#fff;margin-top:2px;\">SISTEMA CORPORATIVO</div> </div>",
+   "---",
+   "---"
+  ],
+  "caption": [],
+  "info": [],
+  "dataframes": [],
+  "metricas": [],
+  "botoes": [
+   "▶️  📍 SMXXX  |  data invalida  |  ID #6",
+   "▶️  📍 SMPB09  |  12/09/2026 09:00  |  ID #5",
+   "▶️  📍 SMVMR31  |  11/09/2026 09:00  |  ID #4",
+   "▶️  📍 SMIPI28  |  10/09/2026 09:00  |  ID #3",
+   "▶️  📍 SMMAU12  |  08/09/2026 13:53  |  ID #2",
+   "▶️  📍 SMGRSA7  |  05/09/2026 10:00  |  ID #1"
+  ],
+  "checkbox": [],
+  "radio": [
+   [
+    "NAVEGAÇÃO:",
+    "🔍 PESQUISAR E EXPORTAR"
+   ]
+  ],
+  "multiselect": [],
+  "expanders": [],
+  "abas": [],
+  "graficos": 0
+ },
+ "rota": {
+  "excecoes": [],
+  "erros": [],
+  "markdown": [
+   "<style> [data-testid=\"stAppViewContainer\"] { background: #F8FAFC; } [data-testid=\"stSidebar\"] { background: #002060 !important; } [data-testid=\"stSidebar\"] * { color: #fff !important; } .eng-banner { background: linear-gradient(135deg, #002060 0%, #003087 100%); color: #fff; padding: 20px 28px; border-radius: 10px; margin-bottom: 24px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 4px 16px rgba(0,32,96,0.18); } .eng-banner-title { font-size: 22px; font-weight: 900; letter-spacing: 1.2px; text-transform: uppercase; } .eng-banner-badge { background: #DA291C; color: #fff; padding: 5px 14px; border-radius: 20px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; } .eng-section { background: #002060; color: #fff; padding: 10px 18px; border-radius: 6px; margin: 24px 0 14px 0; font-weight: 700; font-size: 13px; text-transform: uppercase; border-left: 5px solid #DA291C; } .eng-metric { background: #fff; border: 1.5px solid #CBD5E1; border-radius: 8px; padding: 14px 10px; text-align: center; } .eng-metric-val { font-size: 26px; font-weight: 900; color: #002060; line-height: 1.1; } .eng-metric-label { font-size: 10px; color: #64748B; text-transform: uppercase; margin-top: 4px; letter-spacing: 0.5px; } .sla-box { border-radius: 8px; padding: 10px 14px; margin-top: 4px; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; } .sla-imediato { background: #fff1f0; border: 2px solid #DA291C; color: #7f1d1d; animation: sla-pulse 1.4s infinite; } .sla-urgente { background: #fff7ed; border: 2px solid #ea580c; color: #7c2d12; } .sla-planejado{ background: #eff6ff; border: 2px solid #2563eb; color: #1e3a8a; } .sla-monitorar{ background: #f8fafc; border: 2px solid #CBD5E1; color: #64748B; } @keyframes sla-pulse { 0%,100%{opacity:1} 50%{opacity:.55} } .sla-kpi { border-radius: 10px; padding: 16px 12px; text-align: center; border: 2px solid transparent; } .sla-kpi-imediato { background:#fff1f0; border-color:#DA291C; } .sla-kpi-urgente { background:#fff7ed; border-color:#ea580c; } .sla-kpi-planejado{ background:#eff6ff; border-color:#2563eb; } .sla-kpi-monitorar{ background:#f8fafc; border-color:#CBD5E1; } .sla-kpi-val { font-size: 28px; font-weight: 900; line-height: 1.1; } .sla-kpi-lbl { font-size: 10px; text-transform: uppercase; margin-top: 4px; letter-spacing: .5px; } </style>",
+   "<div class=\"eng-banner\"> <div> <div class=\"eng-banner-title\">⚡ GIRCP</div> <div style=\"font-size: 12px; opacity: 0.75; margin-top: 2px;\">GERADOR INTELIGENTE DE RELATÓRIOS E CONTROLE FOTOGRÁFICO &mdash; ROTEIRIZAÇÃO TÁTICA E FIELD SERVICE</div> </div> <div class=\"eng-banner-badge\">SISTEMA CORPORATIVO</div> </div>",
+   "### 📍 Configuração da Rota",
+   "<div style=\"text-align:center;padding:20px 0 10px 0;\"> <div style=\"font-size:42px;\">⚡</div> <div style=\"font-size:27px;font-weight:900;letter-spacing:1.5px;color:#fff;\">GIRCP</div> <div style=\"font-size:15px;opacity:0.65;color:#fff;margin-top:2px;\">SISTEMA CORPORATIVO</div> </div>",
+   "---",
+   "---"
+  ],
+  "caption": [],
+  "info": [],
+  "dataframes": [],
+  "metricas": [],
+  "botoes": [
+   "🚀 Otimizar Rota de Manutenção"
+  ],
+  "checkbox": [],
+  "radio": [
+   [
+    "NAVEGAÇÃO:",
+    "🗺️ ROTEIRIZAÇÃO TÁTICA"
+   ]
+  ],
+  "multiselect": [
+   [
+    "Selecione os Sites a Visitar:",
+    [
+     "SMXXX",
+     "SMVMR31",
+     "SMMAU12",
+     "SMGRSA7"
+    ]
+   ]
+  ],
+  "expanders": [],
+  "abas": [],
+  "graficos": 0
+ },
+ "novo": {
+  "excecoes": [],
+  "erros": [],
+  "markdown": [
+   "<style> [data-testid=\"stAppViewContainer\"] { background: #F8FAFC; } [data-testid=\"stSidebar\"] { background: #002060 !important; } [data-testid=\"stSidebar\"] * { color: #fff !important; } .eng-banner { background: linear-gradient(135deg, #002060 0%, #003087 100%); color: #fff; padding: 20px 28px; border-radius: 10px; margin-bottom: 24px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 4px 16px rgba(0,32,96,0.18); } .eng-banner-title { font-size: 22px; font-weight: 900; letter-spacing: 1.2px; text-transform: uppercase; } .eng-banner-badge { background: #DA291C; color: #fff; padding: 5px 14px; border-radius: 20px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; } .eng-section { background: #002060; color: #fff; padding: 10px 18px; border-radius: 6px; margin: 24px 0 14px 0; font-weight: 700; font-size: 13px; text-transform: uppercase; border-left: 5px solid #DA291C; } .eng-metric { background: #fff; border: 1.5px solid #CBD5E1; border-radius: 8px; padding: 14px 10px; text-align: center; } .eng-metric-val { font-size: 26px; font-weight: 900; color: #002060; line-height: 1.1; } .eng-metric-label { font-size: 10px; color: #64748B; text-transform: uppercase; margin-top: 4px; letter-spacing: 0.5px; } .sla-box { border-radius: 8px; padding: 10px 14px; margin-top: 4px; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; } .sla-imediato { background: #fff1f0; border: 2px solid #DA291C; color: #7f1d1d; animation: sla-pulse 1.4s infinite; } .sla-urgente { background: #fff7ed; border: 2px solid #ea580c; color: #7c2d12; } .sla-planejado{ background: #eff6ff; border: 2px solid #2563eb; color: #1e3a8a; } .sla-monitorar{ background: #f8fafc; border: 2px solid #CBD5E1; color: #64748B; } @keyframes sla-pulse { 0%,100%{opacity:1} 50%{opacity:.55} } .sla-kpi { border-radius: 10px; padding: 16px 12px; text-align: center; border: 2px solid transparent; } .sla-kpi-imediato { background:#fff1f0; border-color:#DA291C; } .sla-kpi-urgente { background:#fff7ed; border-color:#ea580c; } .sla-kpi-planejado{ background:#eff6ff; border-color:#2563eb; } .sla-kpi-monitorar{ background:#f8fafc; border-color:#CBD5E1; } .sla-kpi-val { font-size: 28px; font-weight: 900; line-height: 1.1; } .sla-kpi-lbl { font-size: 10px; text-transform: uppercase; margin-top: 4px; letter-spacing: .5px; } </style>",
+   "<div class=\"eng-banner\"> <div> <div class=\"eng-banner-title\">⚡ GIRCP</div> <div style=\"font-size: 12px; opacity: 0.75; margin-top: 2px;\">GERADOR INTELIGENTE DE RELATÓRIOS E CONTROLE FOTOGRÁFICO &mdash; NOVO RELATÓRIO</div> </div> <div class=\"eng-banner-badge\">SISTEMA CORPORATIVO</div> </div>",
+   "<div class=\"eng-section\">📋 &nbsp; 1. IDENTIFICAÇÃO DA INFRAESTRUTURA</div>",
+   "<div class=\"eng-section\">📸 &nbsp; 2. EVIDÊNCIAS FOTOGRÁFICAS PRINCIPAIS</div>",
+   "<div class=\"eng-section\">📋 &nbsp; 2. METADADOS DAS EVIDÊNCIAS</div>",
+   "<div class=\"eng-section\">📎 &nbsp; 3. ANEXOS ADICIONAIS</div>",
+   "<div class=\"eng-section\">📝 &nbsp; 4. CONCLUSÃO E PARECER TÉCNICO</div>",
+   "<div style=\"text-align:center;padding:20px 0 10px 0;\"> <div style=\"font-size:42px;\">⚡</div> <div style=\"font-size:27px;font-weight:900;letter-spacing:1.5px;color:#fff;\">GIRCP</div> <div style=\"font-size:15px;opacity:0.65;color:#fff;margin-top:2px;\">SISTEMA CORPORATIVO</div> </div>",
+   "---",
+   "---"
+  ],
+  "caption": [],
+  "info": [
+   "**Inteligência Analítica:** Importe arquivo **.KML** ou **.XLSX** para criar filtro em cascata."
+  ],
+  "dataframes": [],
+  "metricas": [],
+  "botoes": [
+   "👁️ PRÉ-VISUALIZAR PDF",
+   "💾 SALVAR RELATÓRIO OFICIAL"
+  ],
+  "checkbox": [],
+  "radio": [
+   [
+    "NAVEGAÇÃO:",
+    "📝 NOVO RELATÓRIO"
+   ]
+  ],
+  "multiselect": [],
+  "expanders": [],
+  "abas": [],
+  "graficos": 0
+ },
+ "rota_otimizada": {
+  "excecoes": [],
+  "erros": [],
+  "markdown": [
+   "<style> [data-testid=\"stAppViewContainer\"] { background: #F8FAFC; } [data-testid=\"stSidebar\"] { background: #002060 !important; } [data-testid=\"stSidebar\"] * { color: #fff !important; } .eng-banner { background: linear-gradient(135deg, #002060 0%, #003087 100%); color: #fff; padding: 20px 28px; border-radius: 10px; margin-bottom: 24px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 4px 16px rgba(0,32,96,0.18); } .eng-banner-title { font-size: 22px; font-weight: 900; letter-spacing: 1.2px; text-transform: uppercase; } .eng-banner-badge { background: #DA291C; color: #fff; padding: 5px 14px; border-radius: 20px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; } .eng-section { background: #002060; color: #fff; padding: 10px 18px; border-radius: 6px; margin: 24px 0 14px 0; font-weight: 700; font-size: 13px; text-transform: uppercase; border-left: 5px solid #DA291C; } .eng-metric { background: #fff; border: 1.5px solid #CBD5E1; border-radius: 8px; padding: 14px 10px; text-align: center; } .eng-metric-val { font-size: 26px; font-weight: 900; color: #002060; line-height: 1.1; } .eng-metric-label { font-size: 10px; color: #64748B; text-transform: uppercase; margin-top: 4px; letter-spacing: 0.5px; } .sla-box { border-radius: 8px; padding: 10px 14px; margin-top: 4px; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; } .sla-imediato { background: #fff1f0; border: 2px solid #DA291C; color: #7f1d1d; animation: sla-pulse 1.4s infinite; } .sla-urgente { background: #fff7ed; border: 2px solid #ea580c; color: #7c2d12; } .sla-planejado{ background: #eff6ff; border: 2px solid #2563eb; color: #1e3a8a; } .sla-monitorar{ background: #f8fafc; border: 2px solid #CBD5E1; color: #64748B; } @keyframes sla-pulse { 0%,100%{opacity:1} 50%{opacity:.55} } .sla-kpi { border-radius: 10px; padding: 16px 12px; text-align: center; border: 2px solid transparent; } .sla-kpi-imediato { background:#fff1f0; border-color:#DA291C; } .sla-kpi-urgente { background:#fff7ed; border-color:#ea580c; } .sla-kpi-planejado{ background:#eff6ff; border-color:#2563eb; } .sla-kpi-monitorar{ background:#f8fafc; border-color:#CBD5E1; } .sla-kpi-val { font-size: 28px; font-weight: 900; line-height: 1.1; } .sla-kpi-lbl { font-size: 10px; text-transform: uppercase; margin-top: 4px; letter-spacing: .5px; } </style>",
+   "<div class=\"eng-banner\"> <div> <div class=\"eng-banner-title\">⚡ GIRCP</div> <div style=\"font-size: 12px; opacity: 0.75; margin-top: 2px;\">GERADOR INTELIGENTE DE RELATÓRIOS E CONTROLE FOTOGRÁFICO &mdash; ROTEIRIZAÇÃO TÁTICA E FIELD SERVICE</div> </div> <div class=\"eng-banner-badge\">SISTEMA CORPORATIVO</div> </div>",
+   "### 📍 Configuração da Rota",
+   "<div class=\"eng-section\">KPI &nbsp; MÉTRICAS DA OPERAÇÃO DE CAMPO</div>",
+   "<div class=\"eng-metric\"><div class=\"eng-metric-val\">3</div><div class=\"eng-metric-label\">SITES ATENDIDOS</div></div>",
+   "<div class=\"eng-metric\"><div class=\"eng-metric-val\">33.5 km</div><div class=\"eng-metric-label\">QUILOMETRAGEM (LINHA RETA)</div></div>",
+   "<div class=\"eng-metric\"><div class=\"eng-metric-val\">0h 50m</div><div class=\"eng-metric-label\">TEMPO DE DIREÇÃO (EST. 40 KM/H)</div></div>",
+   "<div class=\"eng-metric\"><div class=\"eng-metric-val\">0.09</div><div class=\"eng-metric-label\">DENSIDADE (Sites/Km)</div></div>",
+   "---",
+   "<span style='color:#16A34A;font-weight:bold;'>🟢 Base/Origem (0)</span> &nbsp;&nbsp; | &nbsp;&nbsp; <span style='color:#002060;font-weight:bold;'>🔵 Sites Alvo (Sequência)</span>",
+   "---",
+   "<div class=\"eng-section\">📸 &nbsp; EVIDÊNCIAS POR SITE — APONTAMENTO DE MATERIAIS</div>",
+   "<div class=\"eng-metric\"><div class=\"eng-metric-val\" style=\"color:#DA291C;\">2</div><div class=\"eng-metric-label\">EVIDÊNCIAS CRÍTICAS</div></div>",
+   "<div class=\"eng-metric\"><div class=\"eng-metric-val\" style=\"color:#D97706;\">1</div><div class=\"eng-metric-label\">OBSERVAÇÕES</div></div>",
+   "<div class=\"eng-metric\"><div class=\"eng-metric-val\">5</div><div class=\"eng-metric-label\">TOTAL DE EVIDÊNCIAS</div></div>",
+   "**Aponte os materiais necessários para cada evidência antes de exportar:**",
+   "**VISOR** &nbsp; <span style='background:#16A34A;color:#fff;padding:1px 8px;border-radius:10px;font-size:11px;'>Normal</span>",
+   "---",
+   "**POSTE** &nbsp; <span style='background:#DA291C;color:#fff;padding:1px 8px;border-radius:10px;font-size:11px;'>Crítico</span>",
+   "---",
+   "**QM** &nbsp; <span style='background:#D97706;color:#fff;padding:1px 8px;border-radius:10px;font-size:11px;'>Observação</span>",
+   "---",
+   "**Teste** &nbsp; <span style='background:#DA291C;color:#fff;padding:1px 8px;border-radius:10px;font-size:11px;'>Crítico</span>",
+   "---",
+   "**Prazo estranho** &nbsp; <span style='background:#16A34A;color:#fff;padding:1px 8px;border-radius:10px;font-size:11px;'>Normal</span>",
+   "---",
+   "---",
+   "<div class=\"eng-section\">📤 &nbsp; EXPORTAR ROTEIRO</div>",
+   "<div style=\"text-align:center;padding:20px 0 10px 0;\"> <div style=\"font-size:42px;\">⚡</div> <div style=\"font-size:27px;font-weight:900;letter-spacing:1.5px;color:#fff;\">GIRCP</div> <div style=\"font-size:15px;opacity:0.65;color:#fff;margin-top:2px;\">SISTEMA CORPORATIVO</div> </div>",
+   "---",
+   "---"
+  ],
+  "caption": [
+   "",
+   "risco de queda",
+   "sem proteção",
+   "",
+   ""
+  ],
+  "info": [
+   "**Ordem Operacional Sugerida:** **BASE** &nbsp; ➔ &nbsp; **SMMAU12** &nbsp; ➔ &nbsp; **SMVMR31** &nbsp; ➔ &nbsp; **SMXXX**"
+  ],
+  "dataframes": [],
+  "metricas": [],
+  "botoes": [
+   "🚀 Otimizar Rota de Manutenção",
+   "📄 Gerar PDF do Roteiro",
+   "📊 Gerar Planilha Excel"
+  ],
+  "checkbox": [],
+  "radio": [
+   [
+    "NAVEGAÇÃO:",
+    "🗺️ ROTEIRIZAÇÃO TÁTICA"
+   ]
+  ],
+  "multiselect": [
+   [
+    "Selecione os Sites a Visitar:",
+    [
+     "SMXXX",
+     "SMVMR31",
+     "SMMAU12",
+     "SMGRSA7"
+    ]
+   ]
+  ],
+  "expanders": [
+   "📍 [01] SMMAU12 — 3 evidência(s)",
+   "📍 [02] SMVMR31 — 1 evidência(s)",
+   "📍 [03] SMXXX — 1 evidência(s)"
+  ],
+  "abas": [],
+  "graficos": 1
+ }
+}
