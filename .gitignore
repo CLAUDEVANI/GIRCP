@@ -11,3 +11,5 @@ Roteiro_*.xlsx
 Orcamento_*.xlsx
 GIRCP_backup_*.db
 assinatura_tecnico.*
+.bak_antes_fase*
+*.db.bak_*

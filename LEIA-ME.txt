@@ -1,0 +1,22 @@
+REFATORACAO SEGURA DO GIRCP (v3.9.1)
+
+Conteudo
+  tests/gircp_testes.py   rede de protecao: roda o app inteiro sobre um banco SINTETICO, em pasta temporaria
+  fases/fase1.py          funcoes unicas (leitura segura do JSON, custo, severidade, prazos)
+  fases/migrar_padroes.py move os dados pessoais do codigo para [padroes] no secrets.toml (usada pela fase 2)
+  fases/fase2.py          seguranca (padroes via secrets, login, busca LIKE, geocodificacao, SHA-256, excecoes)
+  fases/fase3.py          rotulos dos KPIs (mapa, orcamento, rota)
+  fases/fase4.py          divide tela_dashboard em funcoes por secao
+  fases/fase5_docs.py     cabecalho do codigo e README (v3.9.1)
+  aplicar_fase.sh         aplica uma fase com backup e REVERSAO AUTOMATICA se algum teste falhar
+  verificar.sh            compila, pyflakes, bandit, confere o selo e roda os testes
+
+Uso (na pasta do projeto, com o ambiente virtual ativo)
+  1) sudo chattr -i app_relatorio.py && chmod u+w app_relatorio.py        (destravar)
+  2) python tests/gircp_testes.py salvar                                  (linha de base, ANTES de tudo)
+  3) bash aplicar_fase.sh 1   (depois 2, 3, 4 e 5, uma por vez, so avancando se terminar com "FASE n OK")
+  4) regrave o selo no secrets.toml e rode:  bash verificar.sh
+  5) teste o app, commite e trave de novo (chmod 444 + sudo chattr +i)
+
+Apos cada fase os testes comparam TODAS as telas com a linha de base. A fase 3 muda rotulos de proposito:
+o script mostra as diferencas e pergunta se pode aceita-las como nova linha de base.
