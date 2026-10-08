@@ -10,6 +10,7 @@ import json
 import os
 import io
 import hashlib
+import logging
 import hmac
 import math
 import requests
@@ -30,6 +31,8 @@ from weasyprint import HTML, default_url_fetcher
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
+
+_log = logging.getLogger("gircp")
 
 # ==============================================================================
 # 0. CONTROLE DE ACESSO E SEGURANÇA (LGPD & ANTI-MALWARE)
@@ -71,7 +74,7 @@ def scan_malware_async(file_path: str):
             try:
                 registrar_auditoria("erro_scan_malware", detalhe=f"{file_path}: {exc}")
             except Exception:
-                pass
+                _log.warning("falha ao registrar erro_scan_malware na auditoria", exc_info=True)
     threading.Thread(target=_scan, daemon=True).start()
 
 def _detalhe_falha_login(usuario):
@@ -94,7 +97,7 @@ def _auditar_login(acao, detalhe):
         init_db()
         registrar_auditoria(acao, detalhe=detalhe)
     except Exception:
-        pass
+        _log.warning("falha ao auditar %s", acao, exc_info=True)
 
 def check_password():
     if "tentativas" not in st.session_state:
@@ -180,7 +183,7 @@ OPT_SELECIONE = "-- SELECIONE --"
 os.makedirs(FOTOS_DIR, exist_ok=True)
 
 # Coordenadas da base operacional padrão (Barueri/SP) — ajuste para sua região
-ROTA_PARTIDA_PADRAO = "-23.5051209,-46.8109935"
+ROTA_PARTIDA_PADRAO = ""  # a base vem de st.secrets["padroes"]["rota_partida"]
 
 def init_db():
     with sqlite3.connect(DB_NAME) as conn:
@@ -268,6 +271,10 @@ def _custo_item(m):
     m = m or {}
     return _num(m.get('quantidade', 1), 1.0) * _num(m.get('custo_unit', 0.0))
 
+def _fmt_qtd(valor):
+    """Quantidade para exibição: preserva decimais (2,5 não vira 2) e tolera texto."""
+    return f"{_num(valor, 1.0):.3f}".rstrip("0").rstrip(".")
+
 def _sev_da_foto(f):
     return normalizar_sev(f.get('severidade', 'Normal'))
 
@@ -300,7 +307,7 @@ def verificar_integridade_codigo():
         try:
             registrar_auditoria("integridade_codigo_violada", detalhe=f"hash_atual={atual[:16]}")
         except Exception:
-            pass
+            _log.warning("falha ao registrar integridade_codigo_violada", exc_info=True)
         st.error("🛑 Integridade do código comprometida: o arquivo da aplicação foi modificado "
                  "após o selo. Acesso bloqueado. Contate o administrador.")
         st.stop()
@@ -528,7 +535,7 @@ def gerar_pdf(dados: dict, fotos: list, extras: list = None) -> tuple[bytes, str
             rows_mat = "".join(
                 "<tr><td style='padding:3px 8px;border:1px solid #e2e8f0;'>" + sanitizar(m.get('descricao','')) + "</td>"
                 "<td style='padding:3px 8px;border:1px solid #e2e8f0;text-align:center;'>" + sanitizar(m.get('unidade','un')) + "</td>"
-                "<td style='padding:3px 8px;border:1px solid #e2e8f0;text-align:center;'>" + str(int(m.get('quantidade',1))) + "</td>"
+                "<td style='padding:3px 8px;border:1px solid #e2e8f0;text-align:center;'>" + _fmt_qtd(m.get('quantidade', 1)) + "</td>"
                 "<td style='padding:3px 8px;border:1px solid #e2e8f0;text-align:right;'>R$ " + f"{m.get('custo_unit',0):.2f}" + "</td>"
                 "<td style='padding:3px 8px;border:1px solid #e2e8f0;text-align:right;font-weight:bold;'>R$ " + f"{_custo_item(m):.2f}" + "</td></tr>"
                 for m in mats_list if m.get('descricao','').strip()
@@ -975,7 +982,7 @@ def tela_novo():
             st.markdown("---")
             c_img, c_dados = st.columns([1, 3])
             with c_img:
-                st.image(arquivo, use_container_width=True)
+                st.image(arquivo, width="stretch")
                 st.caption(f"ID: {sanitizar(foto_id)}")
             with c_dados:
                 tit = st.text_input(LBL_TITULO, key=f"t_{safe_key}")
@@ -1017,7 +1024,7 @@ def tela_novo():
             scan_malware_async(caminho_extra)
             
             c_img_ex, c_dados_ex = st.columns([1, 3])
-            with c_img_ex: st.image(arq_ex, use_container_width=True)
+            with c_img_ex: st.image(arq_ex, width="stretch")
             with c_dados_ex:
                 t_ex = st.text_input(LBL_TITULO, key=f"t_ex_{idx_ex}")
                 c_ex = st.text_area(LBL_DESCRICAO, key=f"c_ex_{idx_ex}", height=75)
@@ -1040,12 +1047,12 @@ def tela_novo():
 
     c_prev, c_sub = st.columns([1, 2])
     with c_prev:
-        if st.button("👁️ PRÉ-VISUALIZAR PDF", use_container_width=True):
+        if st.button("👁️ PRÉ-VISUALIZAR PDF", width="stretch"):
             pdf_bytes_tmp, _ = gerar_pdf(dados_cad, fotos_proc, extras_proc)
             st.download_button("⬇️ Baixar Preview", pdf_bytes_tmp, "Preview.pdf", "application/pdf")
             
     with c_sub:
-        submit = st.button("💾 SALVAR RELATÓRIO OFICIAL", type="primary", use_container_width=True)
+        submit = st.button("💾 SALVAR RELATÓRIO OFICIAL", type="primary", width="stretch")
 
     if submit: 
         erros = []
@@ -1302,7 +1309,7 @@ def _render_dados_cadastrais_form(row, lid, fotos_db, extras_db):
     fotos_edit = _render_edicao_lista(fotos_db, lid, "EDITAR EVIDÊNCIAS", "📸", "f")
     extras_edit = _render_edicao_lista(extras_db, lid, "EDITAR ANEXOS", "📎", "e")
     novas = _render_novas_fotos(lid, fotos_db + extras_db)
-    salvar = st.button("🔄  SALVAR ALTERAÇÕES", type="primary", use_container_width=True, key=f"salvar_{lid}")
+    salvar = st.button("🔄  SALVAR ALTERAÇÕES", type="primary", width="stretch", key=f"salvar_{lid}")
     return {"lid": lid, "row": row, "salvar": salvar, "fotos_db": fotos_db, "extras_db": extras_db, "fotos_edit": fotos_edit, "extras_edit": extras_edit, "novas": novas, "cad": cad}
 
 def _render_relatorio_expander(row):
@@ -1313,7 +1320,7 @@ def _render_relatorio_expander(row):
 
     aberto = st.session_state[exp_key]
     icone = "🔽" if aberto else "▶️"
-    if st.button(f"{icone}  📍 {sanitizar(row['site_id'])}  |  {sanitizar(row['data_hora'])}  |  ID #{lid}", key=f"toggle_{lid}", use_container_width=True):
+    if st.button(f"{icone}  📍 {sanitizar(row['site_id'])}  |  {sanitizar(row['data_hora'])}  |  ID #{lid}", key=f"toggle_{lid}", width="stretch"):
         st.session_state[exp_key] = not aberto
         st.rerun()
 
@@ -1464,13 +1471,13 @@ def _render_estatisticas(df_f):
             tab["media"] = (tab["Evidencias"] / tab["Laudos"].where(tab["Laudos"] > 0)).fillna(0).round(1)
             tab = tab.rename(columns={"tecnico": "Técnico", "Evidencias": "Evidências", "Criticas": "Críticas",
                                       "pct": "% Críticas", "media": "Média evid./laudo", "Custo": "Custo est. (R$)"})
-            st.dataframe(tab, use_container_width=True, hide_index=True)
+            st.dataframe(tab, width="stretch", hide_index=True)
             df_sev = df_ev.groupby(["tecnico", "severidade"]).size().reset_index(name="Quantidade")
             fig = px.bar(df_sev, x="tecnico", y="Quantidade", color="severidade", barmode="stack",
                          color_discrete_map={"Critico": COR_VERMELHO, "Observacao": COR_AMARELO, "Normal": COR_VERDE},
                          labels={"tecnico": "Técnico", "severidade": "Severidade"})
             fig.update_layout(margin=dict(l=0, r=0, t=30, b=0))
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
     with t_site:
         if df_ev.empty:
@@ -1490,14 +1497,14 @@ def _render_estatisticas(df_f):
             tab = tab.rename(columns={"site_id": "Site", "Evidencias": "Evidências", "Criticas": "Críticas",
                                       "Observacoes": "Observações", "Imediato": "SLA imediato", "Custo": "Custo est. (R$)"})
             st.caption("Top 15 sites por nº de evidências críticas, depois SLA imediato.")
-            st.dataframe(tab, use_container_width=True, hide_index=True)
+            st.dataframe(tab, width="stretch", hide_index=True)
 
     with t_cat:
         if df_ev.empty:
             st.info("Sem evidências para o filtro atual.")
         else:
             cat = df_ev["categoria"].value_counts().rename_axis("Categoria").reset_index(name="Evidências")
-            st.dataframe(cat, use_container_width=True, hide_index=True)
+            st.dataframe(cat, width="stretch", hide_index=True)
             s_antes = set(df_ev.loc[df_ev["categoria"] == "Antes", "site_id"])
             s_depois = set(df_ev.loc[df_ev["categoria"] == "Depois", "site_id"])
             pend = sorted(s_antes - s_depois, key=str)
@@ -1516,7 +1523,7 @@ def _render_estatisticas(df_f):
         else:
             tab = st_ser.value_counts().rename_axis("Status").reset_index(name="Laudos")
             tab["%"] = (tab["Laudos"] / tab["Laudos"].sum() * 100).round(1)
-            st.dataframe(tab, use_container_width=True, hide_index=True)
+            st.dataframe(tab, width="stretch", hide_index=True)
 
     with t_qual:
         def _sem_gps(d):
@@ -1537,7 +1544,7 @@ def _render_estatisticas(df_f):
         ]
         tab = pd.DataFrame(indicadores, columns=["Indicador", "Ocorrências", "Base"])
         tab["%"] = (tab["Ocorrências"] / tab["Base"].where(tab["Base"] > 0) * 100).fillna(0).round(1)
-        st.dataframe(tab, use_container_width=True, hide_index=True)
+        st.dataframe(tab, width="stretch", hide_index=True)
 
 def _dash_resumo(df_filtrado):
     secao("📊", "RESUMO GERAL")
@@ -1597,7 +1604,7 @@ def _dash_resumo(df_filtrado):
             fig_bar = px.bar(df_agrupado, x="site_id", y="total_imagens", text="total_imagens", color="total_imagens",
                              color_continuous_scale=px.colors.sequential.Reds, labels={"site_id": "Site", "total_imagens": "Total de Imagens"})
             fig_bar.update_layout(margin=dict(l=0, r=0, t=30, b=0), showlegend=False)
-            st.plotly_chart(fig_bar, use_container_width=True)
+            st.plotly_chart(fig_bar, width="stretch")
             # ── Tabela de sites com botão Destacar ──
             rows_prod = ""
             for _, rp in df_agrupado.iterrows():
@@ -1635,7 +1642,7 @@ def _dash_resumo(df_filtrado):
             fig_pie = px.pie(df_sev, values='Quantidade', names='Severidade', hole=0.4, 
                              color='Severidade', color_discrete_map={"Critico": COR_VERMELHO, "Observacao": COR_AMARELO, "Normal": COR_VERDE})
             fig_pie.update_layout(margin=dict(l=0, r=0, t=30, b=0))
-            st.plotly_chart(fig_pie, use_container_width=True)
+            st.plotly_chart(fig_pie, width="stretch")
         else:
             st.info("Sem dados de severidade para exibir.")
 
@@ -1812,7 +1819,7 @@ def _dash_mapa(df_filtrado):
                 "html": "<div style='font-family:sans-serif;min-width:200px;'><b style='font-size:13px;'>📍 {site_id}</b><br><span style='font-size:11px;'>{icone_status} <b>{status_visita}</b></span><span style='color:#DA291C;font-weight:bold;'> {alerta_critico}</span><br>👷 {tecnico}<br>📅 {data_hora}<br>🏠 {endereco}</div>",
                 "style": {"backgroundColor": "#002060", "color": "white", "borderRadius": "8px", "padding": "12px", "fontSize": "12px"}
             }
-            st.pydeck_chart(pdk.Deck(layers=[layer_pontos], initial_view_state=view_state, tooltip=tooltip, map_style="road"), use_container_width=True)
+            st.pydeck_chart(pdk.Deck(layers=[layer_pontos], initial_view_state=view_state, tooltip=tooltip, map_style="road"), width="stretch")
         else:
             st.info(f"💡 Nenhuma visita com status '{status_filtro}' possui coordenadas de GPS cadastradas.")
     else:
@@ -1828,7 +1835,7 @@ def _dash_tendencia(df_filtrado):
         fig_line = px.line(df_tempo, x='data_formatada', y='Laudos', markers=True, labels={"data_formatada": "Data da Vistoria"})
         fig_line.update_traces(line_color=COR_AZUL_MED)
         fig_line.update_layout(margin=dict(l=0, r=0, t=30, b=0))
-        st.plotly_chart(fig_line, use_container_width=True)
+        st.plotly_chart(fig_line, width="stretch")
     else:
         st.info("Dados de data insuficientes para gerar a linha do tempo.")
 
@@ -1933,7 +1940,7 @@ def _dash_orcamento(df_filtrado):
             data=buf_orc.getvalue(),
             file_name=f"Orcamento_{datetime.now().strftime('%Y%m%d%H%M%S')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=False
+            width="content"
         )
 
     st.markdown("---")
@@ -1946,7 +1953,7 @@ def _dash_auditoria():
             with sqlite3.connect(DB_NAME) as conn:
                 df_audit = pd.read_sql_query("SELECT * FROM audit_log ORDER BY id DESC LIMIT 100", conn)
                 if not df_audit.empty:
-                    st.dataframe(df_audit, use_container_width=True, hide_index=True)
+                    st.dataframe(df_audit, width="stretch", hide_index=True)
                 else:
                     st.info("Nenhum registro de auditoria encontrado.")
         except Exception:
@@ -2056,8 +2063,8 @@ def geocodificar_endereco(endereco):
                 _GEO_CACHE.clear()
             _GEO_CACHE[chave] = (float(dados[0]["lat"]), float(dados[0]["lon"]))
             return _GEO_CACHE[chave]
-    except Exception:
-        pass
+    except Exception as exc:
+        _log.info("geocodificacao falhou: %s", type(exc).__name__)
     return None
 
 def formatar_tempo(segundos):
@@ -2081,7 +2088,7 @@ def tela_roteirizacao():
     st.markdown("### 📍 Configuração da Rota")
     c_base, c_sites = st.columns(2)
     with c_base:
-        partida_txt = st.text_input("Ponto de Partida (Base/Hotel) — coordenadas (lat,lon) ou endereço:", value=ROTA_PARTIDA_PADRAO, key="rota_ponto_partida")
+        partida_txt = st.text_input("Ponto de Partida (Base/Hotel) — coordenadas (lat,lon) ou endereço:", value=_padrao("rota_partida", ROTA_PARTIDA_PADRAO), key="rota_ponto_partida")
     with c_sites:
         sites_alvo = st.multiselect("Selecione os Sites a Visitar:", lista_opcoes)
         
@@ -2102,7 +2109,7 @@ def tela_roteirizacao():
             except Exception:
                 _geo = geocodificar_endereco(partida_txt.strip()) if partida_txt.strip() else None
                 if _geo is None:
-                    st.error("Ponto de partida não encontrado. Use coordenadas (-23.5051209,-46.8109935) ou um endereço completo, ex.: Rua Petrolina, 296, Jardim Mutinga, Barueri, SP")
+                    st.error("Ponto de partida não encontrado. Use coordenadas (ex.: -23.55,-46.63) ou um endereço completo, ex.: Av. Paulista, 1000, São Paulo, SP")
                     return
                 _lat_p, _lon_p = _geo
                 st.caption(f"📍 Endereço localizado: {_lat_p:.7f},{_lon_p:.7f}")
@@ -2183,7 +2190,7 @@ def tela_roteirizacao():
                 layers_mapa.append(layer_linha)
 
             r = pdk.Deck(layers=layers_mapa, initial_view_state=view_state, tooltip={"text": "Site: {id}"}, map_style="road")
-            st.pydeck_chart(r, use_container_width=True)
+            st.pydeck_chart(r, width="stretch")
             st.markdown(f"<span style='color:#16A34A;font-weight:bold;'>🟢 Base/Origem (0)</span> &nbsp;&nbsp; | &nbsp;&nbsp; <span style='color:{COR_AZUL};font-weight:bold;'>🔵 Sites Alvo (Sequência)</span>", unsafe_allow_html=True)
 
             st.session_state["_rota_resultado"] = {"rota": rota_otimizada, "distancia_km": distancia_total_km, "duracao_seg": duracao_total_seg}
@@ -2254,7 +2261,7 @@ def tela_roteirizacao():
         col_pdf, col_xlsx = st.columns(2)
 
         with col_pdf:
-            if st.button("📄 Gerar PDF do Roteiro", type="primary", use_container_width=True):
+            if st.button("📄 Gerar PDF do Roteiro", type="primary", width="stretch"):
                 with st.spinner("Gerando PDF..."):
                     _pb, _pn = gerar_pdf_rota(rota_salva, dist_salva, dur_salva, tecnico_rota, evidencias_por_site)
                 st.session_state["_rota_pdf_bytes"] = _pb
@@ -2262,10 +2269,10 @@ def tela_roteirizacao():
                 st.rerun()
 
             if st.session_state.get("_rota_pdf_bytes"):
-                st.download_button(label="⬇️ Baixar PDF", data=st.session_state["_rota_pdf_bytes"], file_name=st.session_state["_rota_pdf_nome"], mime="application/pdf", use_container_width=True, key="dl_pdf_rota")
+                st.download_button(label="⬇️ Baixar PDF", data=st.session_state["_rota_pdf_bytes"], file_name=st.session_state["_rota_pdf_nome"], mime="application/pdf", width="stretch", key="dl_pdf_rota")
 
         with col_xlsx:
-            if st.button("📊 Gerar Planilha Excel", use_container_width=True):
+            if st.button("📊 Gerar Planilha Excel", width="stretch"):
                 with st.spinner("Gerando Excel..."):
                     _xb, _xn = gerar_excel_rota(rota_salva, dist_salva, dur_salva, tecnico_rota, evidencias_por_site)
                 st.session_state["_rota_xlsx_bytes"] = _xb
@@ -2273,7 +2280,7 @@ def tela_roteirizacao():
                 st.rerun()
 
             if st.session_state.get("_rota_xlsx_bytes"):
-                st.download_button(label="⬇️ Baixar Excel", data=st.session_state["_rota_xlsx_bytes"], file_name=st.session_state["_rota_xlsx_nome"], mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, key="dl_xlsx_rota")
+                st.download_button(label="⬇️ Baixar Excel", data=st.session_state["_rota_xlsx_bytes"], file_name=st.session_state["_rota_xlsx_nome"], mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width="stretch", key="dl_xlsx_rota")
 
 def _css_rota_pdf() -> str:
     return f"""

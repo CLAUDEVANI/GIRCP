@@ -91,7 +91,9 @@ def executar(app_path=APP):
             at = _nova(app).run()
             at.sidebar.radio[0].set_value(MENUS[t]).run()
             saida[t] = retrato(at)
-        at = _nova(app).run()
+        at = _nova(app)
+        at.secrets["padroes"] = {"rota_partida": "-23.5051209,-46.8109935"}
+        at = at.run()
         at.sidebar.radio[0].set_value(MENUS["rota"]).run()
         sites = list(at.multiselect[0].options)
         if sites:

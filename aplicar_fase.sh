@@ -3,7 +3,7 @@
 set -u
 APP=app_relatorio.py
 N="${1:-}"
-case "$N" in 1|2|3|4|5) ;; *) echo "uso: ./aplicar_fase.sh 1|2|3|4|5"; exit 1;; esac
+case "$N" in 1|2|3|4|5|6|7) ;; *) echo "uso: ./aplicar_fase.sh 1|2|3|4|5|6|7"; exit 1;; esac
 [ -w "$APP" ] || { echo "ERRO: $APP esta travado. Rode: sudo chattr -i $APP && chmod u+w $APP"; exit 1; }
 [ -f tests/baseline.json ] || { echo "ERRO: salve antes a linha de base: python tests/gircp_testes.py salvar"; exit 1; }
 [ -f "fases/fase$N.py" ] || [ -f "fases/fase${N}_docs.py" ] || { echo "ERRO: script da fase $N nao encontrado"; exit 1; }
@@ -30,7 +30,8 @@ if ! python tests/gircp_testes.py comparar; then
     restaurar
   fi
 fi
-if [ "$N" -ge 1 ] && [ "$N" -le 4 ]; then echo "== teste: laudo corrompido"; python tests/gircp_testes.py corrompido || restaurar; fi
+if [ "$N" != "5" ]; then echo "== teste: laudo corrompido"; python tests/gircp_testes.py corrompido || restaurar; fi
 if [ "$N" = "2" ]; then echo "== teste: seguranca"; python tests/gircp_testes.py seguranca || restaurar; fi
+if [ "$N" -ge 6 ]; then echo "== teste: exportacoes (PDF, Excel, KML, upload)"; python tests/gircp_exportacoes.py || restaurar; fi
 echo; echo ">>> FASE $N OK. Backup em $BAK.py (apague quando terminar)."
 echo ">>> O selo mudou: regrave o hash no secrets.toml antes de subir o app (veja verificar.sh)."
