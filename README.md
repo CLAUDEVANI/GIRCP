@@ -4,6 +4,27 @@ Aplicação web de missão crítica desenvolvida em Python com Streamlit para cr
 
 ---
 
+## ✨ O que há de novo na v3.9.1 (Refatoração Segura e Segurança)?
+
+Refatoração em fases, cada uma validada contra uma linha de base de testes (nenhuma tela mudou, exceto os rótulos de KPI descritos abaixo):
+* **Rede de proteção:** `tests/gircp_testes.py` roda o app inteiro sobre um banco sintético, em pasta temporária (não toca no seu `.db`, nas fotos nem no `secrets.toml`). Modos: `salvar` e `comparar` (cada tela é comparada com a linha de base), `corrompido` (laudo com JSON quebrado não derruba nenhuma tela) e `seguranca` (login, busca, padrões e geocodificação). `tests/gircp_exportacoes.py` testa o PDF do laudo, o PDF e o Excel da rota, a importação de KML e a validação de upload. `aplicar_fase.sh` aplica cada fase com backup e reversão automática se algum teste falhar, e `verificar.sh` confere compilação, `pyflakes`, `bandit`, selo e testes.
+* **Regras únicas:** `_carregar_lista_json`, `_custo_item`, `_tem_critico` e `_PRAZOS_ORD` substituem cálculos repetidos no Dashboard, PDF, orçamento e mapa. Um laudo com JSON corrompido não derruba mais o Dashboard nem a Pesquisa.
+* **Dados pessoais fora do código:** os valores padrão do cadastro (contato, telefone, e-mail, técnico, ART/RRT) e a coordenada da base da roteirização vêm de `st.secrets["padroes"]`; sem a seção, os campos começam vazios. O técnico herda o contato quando não definido, evitando dois nomes para a mesma pessoa.
+* **Login:** falhas de login são registradas na auditoria; o bloqueio (5 falhas em 5 minutos) é por usuário e persiste ao recarregar a página; o primeiro login em banco ainda inexistente não quebra mais a auditoria.
+* **Busca e geocodificação:** `%` e `_` na busca são tratados como texto; a geocodificação guarda acertos em cache e respeita 1 consulta por segundo; MD5 trocado por SHA-256 nas chaves de widget; sem `except:` nus, e as falhas silenciosas de auditoria e geocodificação deixam rastro no log (`gircp`).
+* **KPIs com rótulos fiéis:** o mapa usa *Com evidências* / *Sem evidências* (o status *Pendente* nunca era atribuído e saiu); *Laudos c/ anomalia crítica*; *Materiais em itens críticos* no orçamento; e a rota informa se distância e tempo vêm do ORS ou de linha reta a 40 km/h.
+* **PDF:** quantidades decimais não são mais truncadas (2,5 aparecia como 2) e quantidade digitada como texto não derruba a geração.
+* **Dashboard modular:** `tela_dashboard` (440 linhas) foi dividida em seis funções por seção (`_dash_resumo`, `_dash_sla`, `_dash_mapa`, `_dash_tendencia`, `_dash_orcamento`, `_dash_auditoria`), sem mudar o que aparece na tela.
+* **Streamlit recente:** `use_container_width` (descontinuado) foi trocado por `width` (testado na versão 1.63).
+
+```bash
+python tests/gircp_testes.py salvar        # antes de refatorar
+python tests/gircp_testes.py comparar      # depois de cada mudança
+python tests/gircp_exportacoes.py          # PDF, Excel, KML e upload
+```
+
+---
+
 ## ✨ O que há de novo na v3.9.0 (Estatísticas, Painel SLA e Roteirização)?
 
 Esta versão deixa o Dashboard e o Painel SLA mais enxutos para visualização e corrige distorções nos indicadores:
@@ -143,7 +164,7 @@ A versão 3.4.1 trouxe inteligência logística e renderização antibloqueio:
 
 | Biblioteca | Papel |
 |---|---|
-| **Streamlit** | Interface web e gerenciamento de estado (`session_state`) |
+| **Streamlit** | Interface web e gerenciamento de estado (`session_state`); testado na versão 1.63 (o parâmetro `width` exige versão recente) |
 | **PyDeck** | Mapas táticos geoespaciais com camadas e tooltips |
 | **Plotly** | Gráficos analíticos (barras, pizza, linha do tempo) |
 | **SQLite3** | Banco de dados relacional embutido (WAL mode) |
@@ -224,6 +245,7 @@ hash_codigo = "gerado-por-selar_codigo.py"
 * **Perfis:** `administrador` vê o botão de backup do banco; `tecnico` não. O campo `nome` preenche o "Técnico em campo" da sidebar, usado nos roteiros exportados (o formulário de novo laudo tem campo próprio).
 * **Desativar a senha geral:** remova `senha_acesso`. O login sem usuário passa a falhar e só os usuários nominais entram.
 * Use senhas fortes e únicas, e restrinja o arquivo: `chmod 600 .streamlit/secrets.toml`.
+* **Padrões do cadastro (opcional):** uma tabela `[padroes]` com `contato`, `telefone`, `email`, `tecnico`, `art_rrt` e `rota_partida` preenche os campos iniciais sem deixar dados pessoais no código. Sem a tabela, os campos começam vazios.
 
 ---
 
@@ -315,19 +337,19 @@ graph TD
 
 ## 🔒 Segurança e Conformidade
 
-* **Acesso:** login por usuário e perfil via `st.secrets`, comparação de senha em tempo constante (`hmac.compare_digest`), *fail-closed* sem credenciais e bloqueio temporário após 5 tentativas incorretas.
+* **Acesso:** login por usuário e perfil via `st.secrets`, comparação de senha em tempo constante (`hmac.compare_digest`), *fail-closed* sem credenciais e bloqueio temporário (5 falhas em 5 minutos, por usuário, persistente ao recarregar a página).
 * **Integridade do código:** selo SHA-256 verificado na inicialização (veja *Proteção Contra Adulteração do Código*).
 * **Injeção:** sanitização de todos os inputs com `html.escape` (Anti-XSS), queries SQL 100% parametrizadas (Anti-SQLi) e proteção contra injeção de fórmulas nas planilhas exportadas.
 * **Uploads:** validação por magic bytes, limite de 20 MB por arquivo, recompressão da imagem com Pillow, varredura ClamAV assíncrona e bloqueio de *path traversal*.
 * **PDF:** o WeasyPrint só carrega `data:` URIs (sem acesso a rede ou a arquivos locais).
-* **Auditoria:** eventos de login, bloqueios, backups, malware e violação de integridade são registrados com o usuário autenticado.
+* **Auditoria:** eventos de login (inclusive falhas), bloqueios, backups, malware e violação de integridade são registrados com o usuário autenticado.
 * **Backup:** o download completo do banco é restrito ao perfil `administrador`.
 * **LGPD:** rodapé em todos os PDFs gerados. Dados armazenados localmente, sem envio a servidores externos (exceto a API ORS, opcional, que recebe apenas coordenadas e o token informado, e o Nominatim/OpenStreetMap, usado só quando um endereço é digitado como ponto de partida e que recebe apenas esse texto).
 * **Repositório:** `secrets.toml`, bancos `.db`, `banco_fotos_gircp/` e relatórios gerados (`Relatorio_*.pdf` etc.) estão no `.gitignore` e não devem ser versionados.
 
 ### Limitações conhecidas
 
-* O contador de tentativas de login é **por sessão do navegador**: recarregar a página o reinicia. Para exposição além da rede interna, use também limitação de taxa no proxy reverso.
+* O bloqueio de login (5 falhas em 5 minutos) é **por usuário e persistente** (usa a auditoria), mas um atacante pode travar um usuário conhecido por 5 minutos. Para exposição além da rede interna, use também limitação de taxa no proxy reverso.
 * As senhas ficam em texto puro no `secrets.toml` (protegido por permissão de arquivo). Não reutilize senhas de outros sistemas.
 * A varredura ClamAV roda depois do salvamento do arquivo; o aviso ao usuário pode não ser exibido, embora o arquivo suspeito seja removido.
 * Sem token do OpenRouteService, a distância da rota é a soma de trechos em linha reta e o tempo estimado assume 40 km/h; use o token para distância e tempo por vias reais.
